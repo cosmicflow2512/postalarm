@@ -68,6 +68,15 @@ jobs:
             --reuid=99 --regid=100 --clear-groups python3 /opt/postalarm/postalarm.py --self-test 2>&1 | tee self-test.log
           grep -q 'uid=99 gid=100' self-test.log
 
+      - name: Migration script inside the image
+        run: |
+          out="$(mktemp -d)"
+          echo '[{"Name":"/tweetalarm","Config":{"Image":"ghcr.io/cosmicflow2512/tweetalarm:latest","Env":["ACCOUNTS=gezine_dev","PUSHOVER_TOKEN=abc","PUSHOVER_USER=def"]}}]' \
+            | docker run --rm -i --entrypoint python3 -v "$out:/templates" "$SMOKE_TAG" /opt/postalarm/migrate.py \
+            | tee migrate.log
+          grep -q 'X_ACCOUNTS = gezine_dev' migrate.log
+          grep -q '>gezine_dev<' "$out/my-postalarm.xml"
+
       - name: RSSHub + postalarm start as non-root and stop cleanly
         run: |
           docker run -d --name smoke $HARDEN -v "$(mktemp -d):/data" \
@@ -103,7 +112,7 @@ jobs:
             docker logs smoke 2>&1 | grep -v '^$' | tail -n 40 | tr '\n' '\r' | sed 's/\r/%0A/g; s/^/::error title=smoke::/'; echo
             echo "::error title=smoke-state::$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' smoke)"
           fi
-          for f in boot.log self-test.log ps.log; do
+          for f in boot.log self-test.log migrate.log ps.log; do
             [ -f "$f" ] && tail -n 20 "$f" | tr '\n' '\r' | sed "s/\r/%0A/g; s/^/::error title=$f::/" && echo
           done
           true

@@ -48,6 +48,17 @@ docker exec postalarm python3 /opt/postalarm/postalarm.py --test-alert discord
 
 ### Umstieg von tweetalarm / discord-author-watcher
 
+Werte automatisch übernehmen: Das Skript liest die Umgebungsvariablen der laufenden Container per `docker inspect` und trägt sie ins postalarm-Template ein. Ein vorhandenes Template wird vorher als `.bak` gesichert. Geheimnisse werden nicht ausgegeben, nur als übernommen markiert. Bei unterschiedlichen Pushover-Daten gewinnt tweetalarm, der Unterschied wird gemeldet. `TEST_ON_START` wird nicht übernommen.
+
+```sh
+docker inspect tweetalarm discord-author-watcher | \
+  docker run --rm -i --entrypoint python3 \
+    -v /boot/config/plugins/dockerMan/templates-user:/templates \
+    ghcr.io/cosmicflow2512/postalarm:latest /opt/postalarm/migrate.py /templates/my-postalarm.xml
+```
+
+Danach in Unraid **Add Container → postalarm** wählen, bei einem bestehenden Container **Edit**. Die Felder sind dann vorausgefüllt.
+
 Alte Variablennamen funktionieren weiter: `ACCOUNTS`, `MODE`, `POLL_INTERVAL`, `INCLUDE_RETWEETS`, `INCLUDE_REPLIES`, `PUSHOVER_API_TOKEN`, `PUSHOVER_USER_KEY`, `POLL_INTERVAL_SECONDS`, `STATE_DIR`. Neue Namen haben Vorrang.
 
 Der Zustand wird nicht übernommen, das ist auch nicht nötig. X markiert beim ersten Lauf alle vorhandenen Tweets als gesehen. Discord beginnt ab Start, optional mit `INITIAL_LOOKBACK_SECONDS`. Die alten Container erst stoppen, wenn postalarm läuft, sonst gibt es eine Lücke. Wenn beide parallel laufen, kommen Alarme doppelt.

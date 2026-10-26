@@ -3,5 +3,4 @@
 .env
 __pycache__
 tests
-templates
 data
