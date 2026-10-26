@@ -632,8 +632,14 @@ def self_test():
         raise ConfigError('Selbsttest: keine CA-Zertifikate gefunden')
     with tempfile.TemporaryDirectory(dir=data) as tmp:
         database(Path(tmp) / 'test.sqlite3').close()
-        if run_dce(['--help'], 60, Path(tmp) / 'stderr.log') != 0:
-            raise ConfigError('Selbsttest: DiscordChatExporter startet nicht')
+        errors = Path(tmp) / 'stderr.log'
+        try:
+            code = run_dce(['--help'], 60, errors)
+        except OSError as err:
+            raise ConfigError(f'Selbsttest: DiscordChatExporter nicht ausführbar ({err})') from None
+        if code != 0:
+            tail = ' | '.join(errors.read_text(errors='replace').strip().splitlines()[-3:])[:500]
+            raise ConfigError(f'Selbsttest: DiscordChatExporter startet nicht (exit={code}): {tail}')
     print(f'ok: python {sys.version.split()[0]}, {ssl.OPENSSL_VERSION}, sqlite {sqlite3.sqlite_version}, '
           f'uid={os.getuid()} gid={os.getgid()}')
     return 0

@@ -65,7 +65,7 @@ jobs:
           grep -q 'Konfigurationsfehler' boot.log
           test "$(sudo stat -c '%u:%g' "$data")" = "99:100"
           docker run --rm $HARDEN -e HOME=/tmp -v "$data:/data" --entrypoint setpriv "$SMOKE_TAG" \
-            --reuid=99 --regid=100 --clear-groups python3 /opt/postalarm/postalarm.py --self-test | tee self-test.log
+            --reuid=99 --regid=100 --clear-groups python3 /opt/postalarm/postalarm.py --self-test 2>&1 | tee self-test.log
           grep -q 'uid=99 gid=100' self-test.log
 
       - name: RSSHub + postalarm start as non-root and stop cleanly
@@ -93,6 +93,16 @@ jobs:
           echo "ohne Key: HTTP $code"; test "$code" != "200"
           docker stop -t 30 smoke
           test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = "0"
+
+      # CI-Logs sind nicht überall abrufbar; bei Fehlern die Log-Enden als Annotations ausgeben.
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          for f in boot.log self-test.log ps.log; do
+            [ -f "$f" ] && tail -n 15 "$f" | sed "s/^/::error title=$f::/"
+          done
+          docker logs smoke 2>&1 | tail -n 25 | sed 's/^/::error title=smoke::/' || true
+          true
 
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
