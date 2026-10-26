@@ -81,7 +81,7 @@ jobs:
           docker logs smoke 2>&1 | grep -q 'RSSHub läuft'
           docker logs smoke 2>&1 | grep -q 'X: @example'
           docker exec smoke ps -eo user:12,args | tee ps.log
-          if grep -E '^root .*(node|postalarm.py)' ps.log; then echo 'läuft als root'; exit 1; fi
+          if grep -E '^root .*(dumb-init|node|postalarm.py|start.sh)' ps.log; then echo 'läuft als root'; exit 1; fi
           # Zugangsdaten nicht im falschen Prozess
           app="$(docker exec smoke pgrep -f postalarm.py | head -n1)"
           docker exec -u 99:100 smoke test -r /proc/$app/environ

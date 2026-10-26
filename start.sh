@@ -15,11 +15,19 @@ case "$PUID:$PGID" in
   *[!0-9:]*|:*|*:|*:*:*) echo "[start] PUID/PGID müssen numerisch sein" >&2; exit 1 ;;
 esac
 
-if [ "$(id -u)" = "0" ] && [ "$PUID" != "0" ]; then
-  mkdir -p "$DATA_DIR"
-  find "$DATA_DIR" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown "$PUID:$PGID" {} +
-  chmod 0700 "$DATA_DIR"
-  exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups "$0" "$@"
+# PID 1 ist zunächst dieses Skript als root. Nach der Vorbereitung wird per exec auf
+# PUID:PGID gewechselt und erst dann dumb-init gestartet. So läuft auch der Init-Prozess
+# unter demselben Benutzer wie seine Kinder und kann ihnen ohne CAP_KILL Signale
+# weiterleiten (docker stop funktioniert mit --cap-drop ALL).
+if [ -z "${POSTALARM_SUPERVISED:-}" ]; then
+  export POSTALARM_SUPERVISED=1
+  if [ "$(id -u)" = "0" ] && [ "$PUID" != "0" ]; then
+    mkdir -p "$DATA_DIR"
+    find "$DATA_DIR" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown "$PUID:$PGID" {} +
+    chmod 0700 "$DATA_DIR"
+    exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups dumb-init -- "$0" "$@"
+  fi
+  exec dumb-init -- "$0" "$@"
 fi
 
 export HOME=/tmp NPM_CONFIG_CACHE=/tmp/.npm NPM_CONFIG_UPDATE_NOTIFIER=false

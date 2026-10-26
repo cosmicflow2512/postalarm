@@ -88,7 +88,7 @@ IDs und Tokens: Discord-Entwicklermodus (Einstellungen → Erweitert), dann Rech
 
 ## Sicherheitsmodell
 
-- Der Supervisor startet als root, übernimmt `/data` für `PUID:PGID` (Rechte `0700`) und startet sich per `setpriv` ohne root neu. RSSHub (Node), postalarm (Python) und DiscordChatExporter laufen danach als dieser Benutzer.
+- Der Supervisor startet als root, übernimmt `/data` für `PUID:PGID` (Rechte `0700`) und startet sich per `setpriv` ohne root neu. RSSHub (Node), postalarm (Python) und DiscordChatExporter laufen danach als dieser Benutzer. Auch der Init-Prozess (`dumb-init`) läuft ohne root, damit `docker stop` trotz entfernter Capabilities funktioniert. Kein `--init` hinzufügen: Ein Init unter root ohne `CAP_KILL` kann Prozessen von uid 99 keine Signale schicken.
 - Template und Compose setzen `no-new-privileges`, entfernen alle Capabilities bis auf die für den Benutzerwechsel nötigen und begrenzen Speicher und Prozesse.
 - Jede Komponente bekommt nur ihre eigenen Zugangsdaten: RSSHub den X-Cookie, DiscordChatExporter den Discord-Token (per Umgebung, nie als Argument), postalarm die Pushover-Daten.
 - RSSHub ist immer per `ACCESS_KEY` geschützt und wird nicht nach außen veröffentlicht. Zum Debuggen kann ein Port 1200 ergänzt werden, Aufruf dann mit `?key=…`.

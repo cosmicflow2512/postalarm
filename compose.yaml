@@ -3,7 +3,6 @@ services:
     image: ghcr.io/cosmicflow2512/postalarm:latest
     build: .
     restart: unless-stopped
-    init: true
     env_file: .env
     volumes:
       - /mnt/cache/appdata/postalarm:/data

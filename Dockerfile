@@ -42,5 +42,5 @@ VOLUME /data
 HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
   CMD ["python3", "/opt/postalarm/postalarm.py", "--healthcheck"]
 
-ENTRYPOINT ["dumb-init", "--"]
-CMD ["/opt/postalarm/start.sh"]
+# start.sh startet dumb-init selbst, nachdem es auf PUID:PGID gewechselt hat.
+ENTRYPOINT ["/opt/postalarm/start.sh"]
