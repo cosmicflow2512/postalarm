@@ -98,10 +98,14 @@ jobs:
       - name: Diagnostics on failure
         if: failure()
         run: |
+          # GitHub zeigt max. 10 Annotations je Schritt: Container-Log zuerst, gebündelt.
+          if docker inspect smoke >/dev/null 2>&1; then
+            docker logs smoke 2>&1 | grep -v '^$' | tail -n 40 | tr '\n' '\r' | sed 's/\r/%0A/g; s/^/::error title=smoke::/'; echo
+            echo "::error title=smoke-state::$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' smoke)"
+          fi
           for f in boot.log self-test.log ps.log; do
-            [ -f "$f" ] && tail -n 15 "$f" | sed "s/^/::error title=$f::/"
+            [ -f "$f" ] && tail -n 20 "$f" | tr '\n' '\r' | sed "s/\r/%0A/g; s/^/::error title=$f::/" && echo
           done
-          docker logs smoke 2>&1 | tail -n 25 | sed 's/^/::error title=smoke::/' || true
           true
 
       - uses: docker/login-action@v3
