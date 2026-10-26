@@ -29,8 +29,9 @@ RUN set -eu; \
     chmod -R a+rX /opt/dce; \
     chmod 0755 /opt/dce/DiscordChatExporter.Cli
 
-COPY --chmod=0644 postalarm.py /opt/postalarm/postalarm.py
-COPY --chmod=0755 start.sh /opt/postalarm/start.sh
+COPY postalarm.py start.sh /opt/postalarm/
+RUN chmod 0755 /opt/postalarm /opt/postalarm/start.sh \
+ && chmod 0644 /opt/postalarm/postalarm.py
 
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/data TZ=Europe/Berlin PUID=99 PGID=100 LANG=C.UTF-8 \
