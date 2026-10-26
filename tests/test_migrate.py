@@ -16,7 +16,7 @@ INSPECT = [
     {'Name': '/tweetalarm', 'Config': {'Image': 'ghcr.io/cosmicflow2512/tweetalarm:latest', 'Env': [
         'ACCOUNTS=gezine_dev', 'TWITTER_AUTH_TOKEN=xcookie123', 'PUSHOVER_TOKEN=apptweet',
         'PUSHOVER_USER=userkey', 'MODE=Emergency', 'BURST_DELAY=2.5', 'POLL_INTERVAL=60',
-        'TEST_ON_START=true', 'PUSHOVER_SOUND=', 'PATH=/usr/bin', 'NODE_VERSION=24', 'CACHE_EXPIRE=60']}},
+        'TEST_ON_START=true', 'EMERGENCY_RETRY=15', 'PUSHOVER_SOUND=', 'PATH=/usr/bin', 'NODE_VERSION=24', 'CACHE_EXPIRE=60']}},
     {'Name': '/discord-author-watcher', 'Config': {
         'Image': 'ghcr.io/cosmicflow2512/discord-author-watcher:latest', 'Env': [
             'DISCORD_TOKEN=dtoken456', 'DISCORD_USER_IDS=1,2', 'DISCORD_CHANNEL_IDS=1356976144418865384',
@@ -53,6 +53,8 @@ class MigrateTests(unittest.TestCase):
         self.assertEqual(v['TWITTER_AUTH_TOKEN'], 'xcookie123')
         self.assertEqual(v['X_MODE'], 'emergency')
         self.assertEqual(v['BURST_DELAY'], '2')
+        self.assertEqual(v['EMERGENCY_RETRY'], '30')
+        self.assertIn('EMERGENCY_RETRY: 15', out)
         self.assertEqual(v['DISCORD_TOKEN'], 'dtoken456')
         self.assertEqual(v['DISCORD_CHANNEL_IDS'], '1356976144418865384')
         self.assertEqual(v['DISCORD_POLL_INTERVAL'], '90')

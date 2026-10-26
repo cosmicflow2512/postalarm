@@ -50,6 +50,25 @@ def env_of(container):
     return {k: v for k, v in pairs}
 
 
+# Grenzen, die tweetalarm still korrigiert hat, postalarm aber als Konfigurationsfehler ablehnt
+CLAMP = {'EMERGENCY_RETRY': (30, 10800), 'EMERGENCY_EXPIRE': (30, 10800), 'BURST_COUNT': (1, 50),
+         'BURST_DELAY': (0, 60), 'BURST_PRIORITY': (-2, 1)}
+
+
+def clamp(key, value, notes):
+    if key not in CLAMP:
+        return value
+    try:
+        number = int(value)
+    except ValueError:
+        return value
+    low, high = CLAMP[key]
+    fixed = min(max(number, low), high)
+    if fixed != number:
+        notes.append(f'{key}: {number} außerhalb {low}-{high}, auf {fixed} gesetzt (wirkte vorher schon so)')
+    return str(fixed)
+
+
 def normalize(key, value):
     value = value.strip()
     if key == 'BURST_DELAY':  # tweetalarm erlaubte Kommazahlen, postalarm ganze Sekunden
@@ -78,7 +97,7 @@ def collect(containers):
             new = mapping.get(old)
             if not new or not value.strip():
                 continue
-            value = normalize(new, value)
+            value = clamp(new, normalize(new, value), notes)
             if new in values and values[new] != value:
                 if new in SECRETS:
                     notes.append(f'{new}: Werte in {origin[new]} und {k} unterschiedlich, behalte {origin[new]}')
