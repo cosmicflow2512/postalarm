@@ -23,7 +23,8 @@ if [ "$(id -u)" = "0" ] && [ "$PUID" != "0" ]; then
 fi
 
 export HOME=/tmp NPM_CONFIG_CACHE=/tmp/.npm NPM_CONFIG_UPDATE_NOTIFIER=false
-APP="python3 /opt/postalarm/postalarm.py"
+APP="${POSTALARM_CMD:-python3 /opt/postalarm/postalarm.py}"
+RSSHUB_DIR="${RSSHUB_DIR:-/app}"
 
 # Nur Discord konfiguriert: kein RSSHub nötig.
 if [ -z "${X_ACCOUNTS:-}${ACCOUNTS:-}" ]; then
@@ -47,7 +48,7 @@ RSSHUB_PID=""
 APP_PID=""
 
 start_rsshub() {
-  cd /app || return 1
+  cd "$RSSHUB_DIR" || return 1
   # RSSHub bekommt weder Pushover- noch Discord-Zugangsdaten.
   setsid env -u DISCORD_TOKEN -u PUSHOVER_TOKEN -u PUSHOVER_USER \
     -u PUSHOVER_API_TOKEN -u PUSHOVER_USER_KEY npm run start &
@@ -69,20 +70,29 @@ start_rsshub() {
   echo "[start] RSSHub läuft"
 }
 
+# Beendet eine Prozessgruppe bzw. einen Prozess: TERM, nach $2 Sekunden KILL.
+# `wait` statt `kill -0`-Schleife: nicht abgeholte Zombies würden sonst als lebendig zählen.
+terminate() {
+  target="$1"; grace="$2"
+  kill -TERM "$target" 2>/dev/null || return 0
+  ( sleep "$grace"; kill -KILL "$target" 2>/dev/null ) &
+  killer=$!
+  wait "${target#-}" 2>/dev/null
+  kill "$killer" 2>/dev/null
+  wait "$killer" 2>/dev/null
+}
+
 stop_rsshub() {
   [ -n "$RSSHUB_PID" ] || return 0
-  kill -TERM "-$RSSHUB_PID" 2>/dev/null
-  j=0
-  while kill -0 "-$RSSHUB_PID" 2>/dev/null && [ "$j" -lt 15 ]; do sleep 1; j=$((j + 1)); done
-  kill -KILL "-$RSSHUB_PID" 2>/dev/null
-  wait "$RSSHUB_PID" 2>/dev/null
+  terminate "-$RSSHUB_PID" 10
+  kill -KILL "-$RSSHUB_PID" 2>/dev/null   # Reste der Gruppe (Kinder von npm)
   RSSHUB_PID=""
 }
 
 stop_all() {
   if [ -n "$APP_PID" ]; then
-    kill -TERM "$APP_PID" 2>/dev/null
-    wait "$APP_PID" 2>/dev/null
+    terminate "$APP_PID" 15
+    APP_PID=""
   fi
   stop_rsshub
 }
