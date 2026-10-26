@@ -1,0 +1,52 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Container version="2">
+  <Name>postalarm</Name>
+  <Repository>ghcr.io/cosmicflow2512/postalarm:latest</Repository>
+  <Registry>https://github.com/cosmicflow2512/postalarm/pkgs/container/postalarm</Registry>
+  <TemplateURL>https://raw.githubusercontent.com/cosmicflow2512/postalarm/main/templates/my-postalarm.xml</TemplateURL>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/cosmicflow2512/postalarm/issues</Support>
+  <Project>https://github.com/cosmicflow2512/postalarm</Project>
+  <Overview>Pushover-Alarm bei neuen Posts: X-Accounts über eingebautes RSSHub, Discord-Nachrichten bestimmter User über DiscordChatExporter. Alarm-Modus je Quelle (emergency, burst, high, normal). Läuft als PUID/PGID mit reduzierten Capabilities. X-Cookie und Discord-Token unterliegen ToS-Risiken. Keine Weboberfläche, keine Ports.</Overview>
+  <Category>Tools:</Category>
+  <Icon>https://pushover.net/images/pushover-logo.svg</Icon>
+  <ExtraParams>--init --restart unless-stopped --log-opt max-size=10m --log-opt max-file=3 --security-opt no-new-privileges=true --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add DAC_OVERRIDE --cap-add FOWNER --memory=1g --pids-limit=512</ExtraParams>
+  <Config Name="Appdata" Target="/data" Default="/mnt/cache/appdata/postalarm" Mode="rw" Description="Warteschlange, Duplikatschutz, Discord-Fortschritt" Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/postalarm</Config>
+  <Config Name="PUSHOVER_TOKEN" Target="PUSHOVER_TOKEN" Default="" Mode="" Description="Pushover App-Token" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="PUSHOVER_USER" Target="PUSHOVER_USER" Default="" Mode="" Description="Pushover User- oder Group-Key" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="X_ACCOUNTS" Target="X_ACCOUNTS" Default="" Mode="" Description="X-Benutzernamen ohne @, kommasepariert. Leer = X aus (dann startet kein RSSHub)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="TWITTER_AUTH_TOKEN" Target="TWITTER_AUTH_TOKEN" Default="" Mode="" Description="auth_token-Cookie einer eingeloggten x.com-Session (Zweitaccount). Nur für X nötig" Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="X_MODE" Target="X_MODE" Default="emergency|burst|high|normal" Mode="" Description="Alarm für Tweets: emergency = wiederholt bis Bestätigung, burst = mehrere Einzelnachrichten" Type="Variable" Display="always" Required="false" Mask="false">emergency</Config>
+  <Config Name="DISCORD_CHANNEL_IDS" Target="DISCORD_CHANNEL_IDS" Default="" Mode="" Description="Channel-/Thread-IDs, kommasepariert. Leer = Discord aus" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="DISCORD_USER_IDS" Target="DISCORD_USER_IDS" Default="" Mode="" Description="Überwachte Discord-User-IDs, kommasepariert (Pflicht, wenn Discord an)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="DISCORD_TOKEN" Target="DISCORD_TOKEN" Default="" Mode="" Description="Discord-Token (nur lokal, nie teilen). Nur für Discord nötig" Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="DISCORD_MODE" Target="DISCORD_MODE" Default="normal|high|emergency|burst" Mode="" Description="Alarm für Discord-Treffer" Type="Variable" Display="always" Required="false" Mask="false">normal</Config>
+  <Config Name="DISCORD_GUILD_IDS" Target="DISCORD_GUILD_IDS" Default="" Mode="" Description="Optionaler zusätzlicher Serverfilter" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="PUSHOVER_DEVICE" Target="PUSHOVER_DEVICE" Default="" Mode="" Description="Optional: nur an dieses Gerät (z. B. iphone)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="PUSHOVER_SOUND" Target="PUSHOVER_SOUND" Default="" Mode="" Description="Optional: z. B. persistent, siren. Leer = Standardton" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="EMERGENCY_RETRY" Target="EMERGENCY_RETRY" Default="30" Mode="" Description="Emergency: Abstand der Wiederholungen in s (30-10800)" Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
+  <Config Name="EMERGENCY_EXPIRE" Target="EMERGENCY_EXPIRE" Default="3600" Mode="" Description="Emergency: wie lange wiederholt wird in s (max. 10800)" Type="Variable" Display="advanced" Required="false" Mask="false">3600</Config>
+  <Config Name="BURST_COUNT" Target="BURST_COUNT" Default="10" Mode="" Description="Burst: Anzahl Nachrichten (1-50)" Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
+  <Config Name="BURST_DELAY" Target="BURST_DELAY" Default="2" Mode="" Description="Burst: Abstand in s (0-60)" Type="Variable" Display="advanced" Required="false" Mask="false">2</Config>
+  <Config Name="BURST_PRIORITY" Target="BURST_PRIORITY" Default="1" Mode="" Description="Burst: Priority -2 bis 1" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="X_POLL_INTERVAL" Target="X_POLL_INTERVAL" Default="60" Mode="" Description="X: Abfrageintervall in s, Minimum 30" Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="X_INCLUDE_RETWEETS" Target="X_INCLUDE_RETWEETS" Default="false|true" Mode="" Description="X: Retweets alarmieren" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="X_INCLUDE_REPLIES" Target="X_INCLUDE_REPLIES" Default="false|true" Mode="" Description="X: Antworten alarmieren" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="CACHE_EXPIRE" Target="CACHE_EXPIRE" Default="60" Mode="" Description="RSSHub-Route-Cache in s (RSSHub-Standard 300 verzögert Alarme)" Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="ACCESS_KEY" Target="ACCESS_KEY" Default="" Mode="" Description="RSSHub-Schlüssel. Leer = bei jedem Start zufällig erzeugt" Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="SELFHEAL_AFTER" Target="SELFHEAL_AFTER" Default="3" Mode="" Description="X: nach so vielen Twitter-API-404 in Folge RSSHub neu starten. 0 = aus" Type="Variable" Display="advanced" Required="false" Mask="false">3</Config>
+  <Config Name="SELFHEAL_MAX_PER_DAY" Target="SELFHEAL_MAX_PER_DAY" Default="3" Mode="" Description="X: höchstens so viele RSSHub-Neustarts in 24 h" Type="Variable" Display="advanced" Required="false" Mask="false">3</Config>
+  <Config Name="DISCORD_POLL_INTERVAL" Target="DISCORD_POLL_INTERVAL" Default="60" Mode="" Description="Discord: Abfrageintervall in s, Minimum 30" Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="INITIAL_LOOKBACK_SECONDS" Target="INITIAL_LOOKBACK_SECONDS" Default="0" Mode="" Description="Discord: beim ersten Start so viele Sekunden zurückschauen" Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="EXPORT_TIMEOUT_SECONDS" Target="EXPORT_TIMEOUT_SECONDS" Default="300" Mode="" Description="Discord: maximale Dauer je Kanalexport in s (30-3600)" Type="Variable" Display="advanced" Required="false" Mask="false">300</Config>
+  <Config Name="FAIL_ALERT_THRESHOLD" Target="FAIL_ALERT_THRESHOLD" Default="5" Mode="" Description="Störungsmeldung nach so vielen Fehlabrufen einer Quelle in Folge" Type="Variable" Display="advanced" Required="false" Mask="false">5</Config>
+  <Config Name="FAIL_ALERT_REPEAT_MIN" Target="FAIL_ALERT_REPEAT_MIN" Default="60" Mode="" Description="Abstand wiederholter Störungsmeldungen in min" Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="SENT_RETENTION_DAYS" Target="SENT_RETENTION_DAYS" Default="30" Mode="" Description="Tage, die zugestellte IDs aufbewahrt werden" Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
+  <Config Name="TEST_ON_START" Target="TEST_ON_START" Default="false|true" Mode="" Description="Beim Start je aktiver Quelle einen Testalarm senden" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="TZ" Target="TZ" Default="Europe/Berlin" Mode="" Description="Zeitzone" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Berlin</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Benutzer-ID im Container (Unraid: 99 = nobody)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Gruppen-ID im Container (Unraid: 100 = users)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="LOG_LEVEL" Target="LOG_LEVEL" Default="INFO|DEBUG|WARNING|ERROR" Mode="" Description="Log-Level" Type="Variable" Display="advanced" Required="false" Mask="false">INFO</Config>
+</Container>

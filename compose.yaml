@@ -1,0 +1,21 @@
+services:
+  postalarm:
+    image: ghcr.io/cosmicflow2512/postalarm:latest
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    volumes:
+      - /mnt/cache/appdata/postalarm:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # Nur für den Start: /data übernehmen und auf PUID/PGID wechseln.
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    mem_limit: 1g
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
