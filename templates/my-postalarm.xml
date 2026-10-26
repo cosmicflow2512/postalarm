@@ -11,7 +11,7 @@
   <Project>https://github.com/cosmicflow2512/postalarm</Project>
   <Overview>Pushover-Alarm bei neuen Posts: X-Accounts über eingebautes RSSHub, Discord-Nachrichten bestimmter User über DiscordChatExporter. Alarm-Modus je Quelle (emergency, burst, high, normal). Läuft als PUID/PGID mit reduzierten Capabilities. X-Cookie und Discord-Token unterliegen ToS-Risiken. Keine Weboberfläche, keine Ports.</Overview>
   <Category>Tools:</Category>
-  <Icon>https://pushover.net/images/pushover-logo.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/cosmicflow2512/postalarm/main/templates/icon.png</Icon>
   <ExtraParams>--restart unless-stopped --log-opt max-size=10m --log-opt max-file=3 --security-opt no-new-privileges=true --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add DAC_OVERRIDE --cap-add FOWNER --memory=1g --pids-limit=512</ExtraParams>
   <Config Name="Appdata" Target="/data" Default="/mnt/cache/appdata/postalarm" Mode="rw" Description="Warteschlange, Duplikatschutz, Discord-Fortschritt" Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/postalarm</Config>
   <Config Name="PUSHOVER_TOKEN" Target="PUSHOVER_TOKEN" Default="" Mode="" Description="Pushover App-Token" Type="Variable" Display="always" Required="true" Mask="true"/>
