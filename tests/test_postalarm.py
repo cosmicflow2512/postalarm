@@ -439,6 +439,78 @@ class ArchiveTests(Base):
             self.assertTrue(pa.poll_archive(self.db, cfg, pa.FailureTracker(cfg)))
 
 
+LIVE_DOC = {'guild': {'id': '10', 'name': 'Mein Server'}, 'channel': {'id': '20', 'name': 'gen/eral'},
+            'messages': [
+                {'id': '1002', 'timestamp': '2026-10-27T23:59:30+01:00', 'content': 'zweite\nZeile',
+                 'author': {'id': '31', 'name': 'bob', 'nickname': 'Bob'},
+                 'reference': {'messageId': '1001'}, 'timestampEdited': '2026-10-27T23:59:50+01:00',
+                 'attachments': [{'fileName': 'a.png', 'url': 'https://cdn/a.png'}]},
+                {'id': '1001', 'timestamp': '2026-10-27T10:00:00+01:00', 'content': 'erste',
+                 'author': {'id': '30', 'name': 'alice'}},
+                {'id': '1003', 'timestamp': '2026-10-28T00:00:10+01:00', 'content': '',
+                 'author': {'id': '32', 'name': 'bot', 'isBot': True},
+                 'embeds': [{'title': 'News', 'url': 'https://x'}]}]}
+
+
+class LiveTests(Base):
+    def cfg(self, **kw):
+        return config(DISCORD_LIVE='true', DISCORD_ARCHIVE_DIR=str(Path(self.tmp.name) / 'archive'),
+                      TZ='Europe/Berlin', **kw)
+
+    def setUp(self):
+        super().setUp()
+        os.environ['TZ'] = 'Europe/Berlin'
+        time.tzset()
+
+    def test_config(self):
+        self.assertTrue(self.cfg()['discord']['live'])
+        self.assertFalse(config()['discord']['live'])
+        with self.assertRaises(pa.ConfigError):
+            config(DISCORD_CHANNEL_IDS='', DISCORD_USER_IDS='', DISCORD_LIVE='true')
+
+    def test_append_by_day_sorted_and_deduplicated(self):
+        cfg = self.cfg()
+        self.assertTrue(pa.live_append(self.db, cfg, LIVE_DOC))
+        folder = Path(self.tmp.name) / 'archive' / 'Mein Server' / 'gen_eral' / 'live'
+        day1 = (folder / '2026-10-27.txt').read_text(encoding='utf-8')
+        day2 = (folder / '2026-10-28.txt').read_text(encoding='utf-8')
+        self.assertTrue(day1.startswith('# Mein Server / #gen/eral (Kanal 20)'))
+        self.assertLess(day1.index('#1001'), day1.index('#1002'), 'chronologisch')
+        self.assertIn('[2026-10-27 10:00:00] alice #1001\n  erste\n', day1)
+        self.assertIn('[2026-10-27 23:59:30] Bob (@bob) #1002 ↪ #1001 (bearbeitet)\n  zweite\n  Zeile\n'
+                      '  [Anhang] a.png https://cdn/a.png\n', day1)
+        self.assertIn('[2026-10-28 00:00:10] bot #1003 [Bot]\n  [Link] News https://x\n', day2)
+        # Gleicher Export erneut (z. B. nach Fehler): nichts doppelt, Kopfzeile nur einmal
+        self.assertTrue(pa.live_append(self.db, cfg, LIVE_DOC))
+        self.assertEqual((folder / '2026-10-27.txt').read_text(encoding='utf-8'), day1)
+        newer = json.loads(json.dumps(LIVE_DOC))
+        newer['messages'] = [{'id': '1004', 'timestamp': '2026-10-28T08:00:00+01:00', 'content': 'neu',
+                              'author': {'id': '30', 'name': 'alice'}}]
+        pa.live_append(self.db, cfg, newer)
+        text = (folder / '2026-10-28.txt').read_text(encoding='utf-8')
+        self.assertEqual(text.count('# Mein Server'), 1)
+        self.assertTrue(text.endswith('[2026-10-28 08:00:00] alice #1004\n  neu\n'))
+
+    def test_write_failure_keeps_monitor_cursor(self):
+        cfg = self.cfg()
+        blocker = Path(self.tmp.name) / 'archive'
+        blocker.write_text('keine Ordner hier')  # mkdir schlägt fehl
+        script = f'import json, sys\na = sys.argv\njson.dump({LIVE_DOC!r}, open(a[a.index("-o") + 1], "w"))\n'
+        with self.db:
+            self.db.execute('INSERT INTO cursors VALUES (?,?)', ('20', '1000'))
+        with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, script)}):
+            pa.poll_channel(self.db, cfg, '20')
+        self.assertEqual(self.db.execute("SELECT after FROM cursors WHERE channel='20'").fetchone()[0], '1000')
+        self.assertIsNone(pa.kv_get(self.db, 'live:20'))
+        # Alarm-Treffer (User 30) wurde trotzdem eingereiht
+        self.assertEqual(self.db.execute('SELECT id FROM pending').fetchall(), [('discord:1001',)])
+        blocker.unlink()
+        with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, script)}):
+            pa.poll_channel(self.db, cfg, '20')
+        self.assertEqual(self.db.execute("SELECT after FROM cursors WHERE channel='20'").fetchone()[0], '1003')
+        self.assertEqual(self.db.execute('SELECT count(*) FROM pending').fetchone()[0], 1)
+
+
 class HealthTests(Base):
     def test_healthcheck(self):
         data = Path(self.tmp.name)

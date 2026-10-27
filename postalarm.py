@@ -171,9 +171,13 @@ def load_config():
             'interval': integer(('DISCORD_POLL_INTERVAL', 'POLL_INTERVAL_SECONDS'), 60, 30, 86400),
             'lookback': integer('INITIAL_LOOKBACK_SECONDS', 0, 0, 30 * 86400),
             'timeout': integer('EXPORT_TIMEOUT_SECONDS', 300, 30, 3600),
+            'live': boolean('DISCORD_LIVE'),
+            'live_dir': Path(env('DISCORD_ARCHIVE_DIR', default='/archive')),
         }
     elif env('DISCORD_USER_IDS'):
         raise ConfigError('DISCORD_USER_IDS gesetzt, aber DISCORD_CHANNEL_IDS fehlt')
+    elif boolean('DISCORD_LIVE'):
+        raise ConfigError('DISCORD_LIVE braucht DISCORD_CHANNEL_IDS (schreibt die Überwachungsexporte mit)')
 
     cfg['archive'] = None
     if boolean('DISCORD_ARCHIVE'):
@@ -596,16 +600,97 @@ def ingest_discord(db, doc, users, channels, guilds):
     return count
 
 
+def safe_name(name):
+    """Datei-/Ordnername aus Server- oder Kanalnamen (wie bei DiscordChatExporter ohne Sonderzeichen)."""
+    name = re.sub(r'[\x00-\x1f/\\:*?"<>|]', '_', str(name or '')).strip(' .')
+    return name[:100] or '_'
+
+
+def message_time(message):
+    try:
+        return dt.datetime.fromisoformat(message['timestamp']).astimezone()
+    except (KeyError, TypeError, ValueError):
+        ms = (int(message['id']) >> 22) + DISCORD_EPOCH_MS
+        return dt.datetime.fromtimestamp(ms / 1000).astimezone()
+
+
+def format_live(message):
+    """Eine Nachricht als lesbarer Textblock (Felder laut DCE JsonMessageWriter)."""
+    author = message.get('author') or {}
+    name, nick = author.get('name') or author.get('id') or '?', author.get('nickname')
+    who = f'{nick} (@{name})' if nick and nick != name else name
+    head = f"[{message_time(message):%Y-%m-%d %H:%M:%S}] {who} #{message['id']}"
+    reference = message.get('reference') or {}
+    if reference.get('messageId'):
+        head += f" ↪ #{reference['messageId']}"
+    if message.get('timestampEdited'):
+        head += ' (bearbeitet)'
+    if author.get('isBot'):
+        head += ' [Bot]'
+    lines = [f'  {line}' for line in (message.get('content') or '').splitlines()]
+    forwarded = message.get('forwardedMessage') or {}
+    if forwarded.get('content'):
+        lines += ['  [Weitergeleitet]'] + [f'    {line}' for line in forwarded['content'].splitlines()]
+    for item in (message.get('attachments') or []) + (forwarded.get('attachments') or []):
+        lines.append(f"  [Anhang] {item.get('fileName', '')} {item.get('url', '')}".rstrip())
+    for embed in message.get('embeds') or []:
+        text = ' '.join(x for x in (embed.get('title'), embed.get('url')) if x)
+        if text:
+            lines.append(f'  [Link] {text}')
+    for sticker in message.get('stickers') or []:
+        lines.append(f"  [Sticker] {sticker.get('name', '')}")
+    return '\n'.join([head] + (lines or ['  [ohne Text]'])) + '\n'
+
+
+def live_append(db, cfg, doc):
+    """Neue Nachrichten (alle User) an Tagesdateien anhängen. True = geschrieben bzw. nichts zu tun.
+
+    Duplikatschutz über die zuletzt geschriebene Message-ID je Kanal, damit ein erneuter Export
+    nach einem Fehler nichts doppelt schreibt.
+    """
+    channel = str(doc['channel']['id'])
+    key = f'live:{channel}'
+    last = int(kv_get(db, key, 0))
+    messages = sorted((m for m in doc['messages'] if int(m['id']) > last), key=lambda m: int(m['id']))
+    if not messages:
+        return True
+    folder = cfg['discord']['live_dir'] / safe_name(doc['guild'].get('name')) / safe_name(
+        doc['channel'].get('name') or channel) / 'live'
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        by_day = {}
+        for message in messages:
+            by_day.setdefault(f'{message_time(message):%Y-%m-%d}', []).append(message)
+        for day, items in by_day.items():
+            path = folder / f'{day}.txt'
+            header = '' if path.exists() else (
+                f"# {doc['guild'].get('name', '')} / #{doc['channel'].get('name', '')} "
+                f"(Kanal {channel}) – {day}\n# Format: [Zeit] Name (@user) #MessageID ↪ #Antwort-auf\n\n")
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(header + ''.join(format_live(m) for m in items))
+                f.flush()
+                os.fsync(f.fileno())
+    except OSError as err:
+        log.error('Live-Mitschnitt Kanal %s fehlgeschlagen (%s); wird beim nächsten Abruf nachgeholt',
+                  channel, type(err).__name__)
+        return False
+    kv_set(db, key, str(max(int(m['id']) for m in messages)))
+    return True
+
+
 def poll_channel(db, cfg, channel):
     d = cfg['discord']
     after = db.execute('SELECT after FROM cursors WHERE channel=?', (channel,)).fetchone()[0]
     with tempfile.TemporaryDirectory(prefix='pa-') as tmp:
         doc = export(channel, after, tmp, d['timeout'])
     messages = doc['messages']
+    # Live-Mitschnitt zuerst; schlägt er fehl, bleibt der Cursor stehen und der Bereich wird erneut
+    # exportiert. Alarme laufen trotzdem (Duplikatschutz), der Mitschnitt holt nach.
+    live_ok = live_append(db, cfg, doc) if d['live'] else True
     with db:
         count = ingest_discord(db, doc, d['users'], d['channels'], d['guilds'])
         # Cursor nur auf empfangene Nachricht setzen, nie auf Uhrzeit: keine Lücken bei Verzögerung.
-        if messages:
+        if messages and live_ok:
             newest = max(int(m['id']) for m in messages)
             if not after.isdigit() or newest > int(after):
                 db.execute('UPDATE cursors SET after=? WHERE channel=?', (str(newest), channel))
@@ -833,8 +918,11 @@ def main():
         threads.append(('x', poll_x, x['interval'], len(x['accounts']) * x['timeout'] + 300))
     if cfg['discord']:
         d = cfg['discord']
-        log.info('Discord: %d Benutzer, %d Kanäle, Intervall %ds, Modus %s',
-                 len(d['users']), len(d['channels']), d['interval'], d['mode'])
+        log.info('Discord: %d Benutzer, %d Kanäle, Intervall %ds, Modus %s, Live-Mitschnitt %s',
+                 len(d['users']), len(d['channels']), d['interval'], d['mode'],
+                 f"nach {d['live_dir']}" if d['live'] else 'aus')
+        if d['live'] and not os.path.ismount(d['live_dir']):
+            log.warning('%s ist kein gemountetes Verzeichnis: Mitschnitt geht beim Neuerstellen verloren', d['live_dir'])
         threads.append(('discord', poll_discord, d['interval'], len(d['channels']) * d['timeout'] + 300))
     if cfg['archive']:
         a = cfg['archive']

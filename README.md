@@ -97,6 +97,29 @@ Ungültige Werte beenden den Start mit `Konfigurationsfehler: …` im Log.
 
 IDs und Tokens: Discord-Entwicklermodus (Einstellungen → Erweitert), dann Rechtsklick → ID kopieren. Token-Anleitung siehe [Token-and-IDs.md](https://github.com/Tyrrrz/DiscordChatExporter/blob/prime/.docs/Token-and-IDs.md). X-Cookie: in einer eingeloggten x.com-Session in den Browser-DevTools unter Cookies den Wert `auth_token` kopieren.
 
+## Discord-Live-Mitschnitt
+
+Mit `DISCORD_LIVE=true` schreibt postalarm **alle** Nachrichten aller User der überwachten Kanäle (`DISCORD_CHANNEL_IDS`) laufend als Text mit, gedacht zum Lesen durch Menschen oder einen Agenten. Grundlage ist der Export, den die Überwachung ohnehin alle `DISCORD_POLL_INTERVAL` Sekunden macht. Es entstehen also **keine zusätzlichen Discord-Anfragen**.
+
+```
+/archive/<Server>/<Kanal>/live/2026-10-27.txt
+```
+
+```
+# Mein Server / #allgemein (Kanal 1356976144418865384) – 2026-10-27
+# Format: [Zeit] Name (@user) #MessageID ↪ #Antwort-auf
+
+[2026-10-27 13:37:05] Bob (@bob) #1432…118 ↪ #1432…004 (bearbeitet)
+  Text der Nachricht
+  [Anhang] bild.png https://cdn.discordapp.com/…
+```
+
+- Eine Datei pro Tag (Ortszeit `TZ`), chronologisch, nur angehängt.
+- Kein doppelter Eintrag nach Fehlern oder Neustarts (letzte geschriebene Message-ID je Kanal).
+- Schlägt das Schreiben fehl (Platte voll, Pfad weg), laufen Alarme weiter. Der Mitschnitt holt beim nächsten Abruf nach.
+- Der Mitschnitt beginnt mit dem Einschalten. Ältere Nachrichten holt das Archiv (`DISCORD_ARCHIVE`).
+- Bearbeitungen und Löschungen nach dem Mitschreiben werden nicht nachgetragen.
+
 ## Discord-Archiv
 
 Optional exportiert postalarm ganze Kanäle mit allen Nachrichten aller User, unabhängig vom Alarm-Filter. Der Export läuft in einem eigenen Thread, die Überwachung läuft parallel weiter.
