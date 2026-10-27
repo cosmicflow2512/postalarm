@@ -69,6 +69,7 @@ Der Zustand wird nicht übernommen, das ist auch nicht nötig. X markiert beim e
 | --- | --- | --- |
 | `PUSHOVER_TOKEN` / `PUSHOVER_USER` | – | Pflicht |
 | `PUSHOVER_DEVICE`, `PUSHOVER_SOUND` | – | optional |
+| `X_ENABLED`, `DISCORD_ENABLED` | `true` | Quelle an/aus, ohne ihre Werte zu löschen. `DISCORD_ENABLED=false` stoppt Alarme, Live-Mitschnitt und Archiv. Sind alle aus, wartet der Container im Leerlauf |
 | `X_ACCOUNTS` | – | X-Namen ohne @, kommasepariert; leer = X aus, kein RSSHub |
 | `TWITTER_AUTH_TOKEN` | – | `auth_token`-Cookie, nur RSSHub bekommt ihn |
 | `X_MODE` | `emergency` | siehe Alarm-Modi |

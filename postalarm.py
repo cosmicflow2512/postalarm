@@ -138,7 +138,12 @@ def load_config():
     if not cfg['pushover_user'].isalnum() or not cfg['pushover_token'].isalnum():
         raise ConfigError('PUSHOVER_TOKEN/PUSHOVER_USER dürfen nur Buchstaben und Ziffern enthalten')
 
+    # Schalter: X_ENABLED / DISCORD_ENABLED=false deaktiviert eine Quelle, ohne ihre Werte zu löschen
+    cfg['x_enabled'] = boolean('X_ENABLED', True)
+    cfg['discord_enabled'] = boolean('DISCORD_ENABLED', True)
     accounts = [a.strip().lstrip('@') for a in env('X_ACCOUNTS', 'ACCOUNTS').split(',') if a.strip()]
+    if not cfg['x_enabled']:
+        accounts = []
     if any(not X_ACCOUNT_RE.match(a) for a in accounts):
         raise ConfigError('X_ACCOUNTS: nur X-Benutzernamen (A-Z, 0-9, _), kommasepariert')
     cfg['x'] = None
@@ -159,7 +164,7 @@ def load_config():
         if not urllib.parse.urlsplit(cfg['x']['rsshub_url']).scheme in ('http', 'https'):
             raise ConfigError('RSSHUB_URL muss mit http:// oder https:// beginnen')
 
-    channels = ids('DISCORD_CHANNEL_IDS')
+    channels = ids('DISCORD_CHANNEL_IDS') if cfg['discord_enabled'] else set()
     cfg['discord'] = None
     if channels:
         secret('DISCORD_TOKEN')
@@ -177,13 +182,13 @@ def load_config():
             'active_duration': integer('DISCORD_ACTIVE_DURATION', 7200, 0, 7 * 86400),
             'live_dir': Path(env('DISCORD_ARCHIVE_DIR', default='/archive')),
         }
-    elif env('DISCORD_USER_IDS'):
+    elif env('DISCORD_USER_IDS') and cfg['discord_enabled']:
         raise ConfigError('DISCORD_USER_IDS gesetzt, aber DISCORD_CHANNEL_IDS fehlt')
-    elif boolean('DISCORD_LIVE'):
+    elif boolean('DISCORD_LIVE') and cfg['discord_enabled']:
         raise ConfigError('DISCORD_LIVE braucht DISCORD_CHANNEL_IDS (schreibt die Überwachungsexporte mit)')
 
     cfg['archive'] = None
-    if boolean('DISCORD_ARCHIVE'):
+    if boolean('DISCORD_ARCHIVE') and cfg['discord_enabled']:
         archive_channels = ids('DISCORD_ARCHIVE_CHANNEL_IDS') or channels
         if not archive_channels:
             raise ConfigError('DISCORD_ARCHIVE: DISCORD_ARCHIVE_CHANNEL_IDS oder DISCORD_CHANNEL_IDS setzen')
@@ -211,7 +216,8 @@ def load_config():
             'dir': Path(env('DISCORD_ARCHIVE_DIR', default='/archive')),
         }
 
-    if not cfg['x'] and not cfg['discord'] and not cfg['archive']:
+    deliberately_off = not cfg['x_enabled'] or not cfg['discord_enabled']
+    if not cfg['x'] and not cfg['discord'] and not cfg['archive'] and not deliberately_off:
         raise ConfigError('Keine Quelle konfiguriert: X_ACCOUNTS, DISCORD_CHANNEL_IDS oder DISCORD_ARCHIVE setzen')
     return cfg
 
@@ -546,6 +552,17 @@ def dce_env():
     return env_
 
 
+def dce_error(stderr):
+    """Aussagekräftige Fehlerzeilen aus der DCE-Ausgabe: ohne Stacktrace ("at ..."), Token geschwärzt."""
+    lines = [line.strip() for line in stderr.splitlines()]
+    lines = [line for line in lines if line and not line.startswith('at ') and not line.startswith('---')]
+    if not lines:
+        return 'keine Ausgabe'
+    # Exception-Zeilen bevorzugen, sonst die letzten Zeilen
+    picked = [line for line in lines if 'exception' in line.lower() or 'error' in line.lower()] or lines
+    return redact(' | '.join(dict.fromkeys(picked[-3:])), [os.getenv('DISCORD_TOKEN', '')])[:500]
+
+
 def run_dce(args, timeout, stderr_path):
     command = [os.getenv('DCE_EXECUTABLE', '/opt/dce/DiscordChatExporter.Cli'), *args]
     with open(stderr_path, 'wb') as stderr:
@@ -570,9 +587,8 @@ def export(channel, after, workdir, timeout=300):
             '--before', dt.datetime.now(dt.timezone.utc).isoformat(), '--parallel', '1']
     code = run_dce(args, timeout, errors)
     if code:
-        tail = errors.read_text(errors='replace').strip().splitlines()[-1:] if errors.exists() else []
-        hint = redact(tail[0], [os.getenv('DISCORD_TOKEN', '')])[:300] if tail else 'keine Ausgabe'
-        raise RuntimeError(f'DiscordChatExporter exit={code}: {hint}')
+        raise RuntimeError(f"DiscordChatExporter exit={code}: "
+                           f"{dce_error(errors.read_text(errors='replace') if errors.exists() else '')}")
     with output.open(encoding='utf-8') as f:
         doc = json.load(f)
     if str(doc['channel']['id']) != channel:
@@ -778,9 +794,7 @@ def archive_channel(db, cfg, channel, now=None):
     if code:
         for p in files:
             p.unlink()
-        tail = stderr.strip().splitlines()[-1:] if stderr.strip() else []
-        hint = redact(tail[0], [os.getenv('DISCORD_TOKEN', '')])[:300] if tail else 'keine Ausgabe'
-        raise RuntimeError(f'DiscordChatExporter exit={code}: {hint}')
+        raise RuntimeError(f'DiscordChatExporter exit={code}: {dce_error(stderr)}')
     if DCE_EMPTY_MARKER in stderr:
         for p in files:
             p.unlink()
@@ -960,6 +974,19 @@ def main():
                 test_alert(cfg, name)
             except PushoverError as err:
                 log.error('Testalarm %s fehlgeschlagen (%s)', name, err)
+    if not cfg['x_enabled']:
+        log.info('X deaktiviert (X_ENABLED=false)')
+    if not cfg['discord_enabled']:
+        log.info('Discord deaktiviert (DISCORD_ENABLED=false)')
+    if not threads:
+        # Alles abgeschaltet: Container bleibt gesund im Leerlauf statt in einer Neustartschleife
+        log.warning('Keine aktive Quelle, postalarm wartet im Leerlauf')
+        while not STOP.is_set():
+            write_heartbeat(data, 'idle', time.time() + 3600)
+            STOP.wait(600)
+        log.info('Beendet')
+        lock.close()
+        return 0
     running = [threading.Thread(target=worker, args=(cfg, *t), name=t[0], daemon=True) for t in threads]
     for t in running:
         t.start()

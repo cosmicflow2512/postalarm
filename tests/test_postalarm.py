@@ -558,6 +558,53 @@ class AdaptivePollingTests(Base):
         self.assertEqual(waits, [1234])
 
 
+class DceErrorTests(unittest.TestCase):
+    def test_skips_stacktrace_and_redacts(self):
+        stderr = ('Failed to export the following channel(s):\n'
+                  'general: DiscordChatExporter.Core.Exceptions.DiscordChatExporterException: '
+                  'Authentication token discord-secret-token is invalid.\n'
+                  '   at DiscordChatExporter.Core.Discord.DiscordClient.GetJsonResponseAsync(String url)\n'
+                  '   at CliFx.CommandLineApplication.RunAsync(IReadOnlyList`1 args) in /_/CliFx/CommandLineApplication.cs:164\n')
+        with patch.dict(os.environ, {'DISCORD_TOKEN': 'discord-secret-token'}):
+            msg = pa.dce_error(stderr)
+        self.assertIn('Authentication token *** is invalid', msg)
+        self.assertNotIn('CliFx', msg)
+        self.assertEqual(pa.dce_error(''), 'keine Ausgabe')
+
+
+class SwitchTests(unittest.TestCase):
+    def test_disable_x_keeps_discord(self):
+        cfg = config(X_ENABLED='false')
+        self.assertIsNone(cfg['x'])
+        self.assertIsNotNone(cfg['discord'])
+
+    def test_disable_discord_disables_live_and_archive(self):
+        cfg = config(DISCORD_ENABLED='false', DISCORD_LIVE='true', DISCORD_ARCHIVE='true')
+        self.assertIsNone(cfg['discord'])
+        self.assertIsNone(cfg['archive'])
+        self.assertIsNotNone(cfg['x'])
+
+    def test_all_off_is_not_an_error(self):
+        cfg = config(X_ENABLED='false', DISCORD_ENABLED='OFF')
+        self.assertIsNone(cfg['x'])
+        self.assertIsNone(cfg['discord'])
+
+    def test_invalid_switch(self):
+        with self.assertRaises(pa.ConfigError):
+            config(X_ENABLED='vielleicht')
+
+    def test_start_sh_skips_rsshub_when_x_disabled(self):
+        import subprocess
+        script = Path(pa.__file__).with_name('start.sh').read_text()
+        block = script[script.index('# X aus oder keine X-Accounts'):script.index('  exec $APP')]
+        for value, expected in [('false', 'aus'), ('OFF', 'aus'), ('true', 'an'), ('', 'an')]:
+            out = subprocess.run(['sh', '-c', block.replace('  echo "[start] X deaktiviert', '  echo aus; exit; echo "') +
+                                  '\nfi\necho an'],
+                                 env={'X_ENABLED': value, 'X_ACCOUNTS': 'a', 'PATH': os.environ['PATH']},
+                                 capture_output=True, text=True).stdout.strip()
+            self.assertEqual(out, expected, value)
+
+
 class HealthTests(Base):
     def test_healthcheck(self):
         data = Path(self.tmp.name)

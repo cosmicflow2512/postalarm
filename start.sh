@@ -39,9 +39,10 @@ export HOME=/tmp NPM_CONFIG_CACHE=/tmp/.npm NPM_CONFIG_UPDATE_NOTIFIER=false
 APP="${POSTALARM_CMD:-python3 /opt/postalarm/postalarm.py}"
 RSSHUB_DIR="${RSSHUB_DIR:-/app}"
 
-# Nur Discord konfiguriert: kein RSSHub nötig.
-if [ -z "${X_ACCOUNTS:-}${ACCOUNTS:-}" ]; then
-  echo "[start] keine X-Accounts gesetzt, RSSHub bleibt aus"
+# X aus oder keine X-Accounts: kein RSSHub nötig.
+case "$(printf %s "${X_ENABLED:-true}" | tr 'A-Z' 'a-z')" in 0|false|no|off) X_OFF=1 ;; *) X_OFF= ;; esac
+if [ -n "$X_OFF" ] || [ -z "${X_ACCOUNTS:-}${ACCOUNTS:-}" ]; then
+  echo "[start] X deaktiviert oder keine X-Accounts gesetzt, RSSHub bleibt aus"
   unset TWITTER_AUTH_TOKEN
   exec $APP
 fi
