@@ -511,6 +511,53 @@ class LiveTests(Base):
         self.assertEqual(self.db.execute('SELECT count(*) FROM pending').fetchone()[0], 1)
 
 
+class AdaptivePollingTests(Base):
+    def run_poll(self, cfg, doc):
+        script = f'import json, sys\na = sys.argv\njson.dump({doc!r}, open(a[a.index("-o") + 1], "w"))\n'
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO cursors VALUES (?,?)', ('20', '1'))
+        with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, script)}):
+            return pa.poll_discord(self.db, cfg, pa.FailureTracker(cfg))
+
+    def test_hourly_then_ten_minutes_after_hit(self):
+        cfg = config(DISCORD_POLL_INTERVAL='3600', DISCORD_ACTIVE_INTERVAL='600', DISCORD_ACTIVE_DURATION='7200')
+        self.assertEqual(pa.discord_interval(self.db, cfg), 3600)
+        other = json.loads(json.dumps(DOC)); other['messages'][0]['author']['id'] = '99'
+        self.assertTrue(self.run_poll(cfg, other))
+        self.assertEqual(pa.discord_interval(self.db, cfg), 3600, 'fremder User: kein Wechsel')
+        self.assertTrue(self.run_poll(cfg, DOC))
+        self.assertEqual(pa.discord_interval(self.db, cfg), 600, 'überwachter User: 10 min')
+        until = pa.kv_get(self.db, 'discord_active_until')
+        self.assertAlmostEqual(until, time.time() + 7200, delta=5)
+        # Übersteht Neustart (persistiert), läuft nach Ablauf zurück auf 1 h
+        self.reopen()
+        self.assertEqual(pa.discord_interval(self.db, cfg), 600)
+        with patch('time.time', return_value=until + 1):
+            self.assertEqual(pa.discord_interval(self.db, cfg), 3600)
+
+    def test_disabled(self):
+        cfg = config(DISCORD_POLL_INTERVAL='3600', DISCORD_ACTIVE_DURATION='0')
+        self.run_poll(cfg, DOC)
+        self.assertEqual(pa.discord_interval(self.db, cfg), 3600)
+        cfg = config(DISCORD_POLL_INTERVAL='60', DISCORD_ACTIVE_INTERVAL='600')
+        self.assertEqual(pa.discord_interval(self.db, cfg), 60, 'aktives Intervall nie länger als normales')
+
+    def test_worker_uses_callable_interval(self):
+        cfg = config(X_ACCOUNTS='', DATA_DIR=self.tmp.name, DISCORD_POLL_INTERVAL='3600')
+        waits = []
+
+        def fake_wait(seconds):
+            waits.append(seconds)
+            pa.STOP.set()  # Schleife nach dem ersten Durchlauf beenden
+            return True
+        try:
+            with patch.object(pa.STOP, 'wait', fake_wait), patch.object(pa, 'deliver', lambda *a: True):
+                pa.worker(cfg, 'discord', lambda db, c, tr: True, lambda db, c: 1234, 300)
+        finally:
+            pa.STOP.clear()
+        self.assertEqual(waits, [1234])
+
+
 class HealthTests(Base):
     def test_healthcheck(self):
         data = Path(self.tmp.name)

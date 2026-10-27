@@ -97,6 +97,20 @@ Ungültige Werte beenden den Start mit `Konfigurationsfehler: …` im Log.
 
 IDs und Tokens: Discord-Entwicklermodus (Einstellungen → Erweitert), dann Rechtsklick → ID kopieren. Token-Anleitung siehe [Token-and-IDs.md](https://github.com/Tyrrrz/DiscordChatExporter/blob/prime/.docs/Token-and-IDs.md). X-Cookie: in einer eingeloggten x.com-Session in den Browser-DevTools unter Cookies den Wert `auth_token` kopieren.
 
+## Discord-Abfrageintervall (adaptiv)
+
+Discord wird im Takt `DISCORD_POLL_INTERVAL` abgefragt. Postet einer der überwachten User (`DISCORD_USER_IDS`), wechselt postalarm für `DISCORD_ACTIVE_DURATION` Sekunden auf `DISCORD_ACTIVE_INTERVAL`. Jeder weitere Treffer verlängert diese Zeit, danach geht es zurück zum normalen Takt. Der Zustand überlebt Neustarts.
+
+Beispiel: stündlich, nach einem Treffer 2 Stunden lang alle 10 Minuten:
+
+```
+DISCORD_POLL_INTERVAL=3600
+DISCORD_ACTIVE_INTERVAL=600
+DISCORD_ACTIVE_DURATION=7200
+```
+
+Es geht keine Nachricht verloren, jeder Abruf holt alles seit dem letzten. Der Alarm kommt aber bis zu ein Intervall später. Der Live-Mitschnitt wird im selben Takt fortgeschrieben.
+
 ## Discord-Live-Mitschnitt
 
 Mit `DISCORD_LIVE=true` schreibt postalarm **alle** Nachrichten aller User der überwachten Kanäle (`DISCORD_CHANNEL_IDS`) laufend als Text mit, gedacht zum Lesen durch Menschen oder einen Agenten. Grundlage ist der Export, den die Überwachung ohnehin alle `DISCORD_POLL_INTERVAL` Sekunden macht. Es entstehen also **keine zusätzlichen Discord-Anfragen**.

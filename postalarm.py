@@ -172,6 +172,9 @@ def load_config():
             'lookback': integer('INITIAL_LOOKBACK_SECONDS', 0, 0, 30 * 86400),
             'timeout': integer('EXPORT_TIMEOUT_SECONDS', 300, 30, 3600),
             'live': boolean('DISCORD_LIVE'),
+            # Nach einem Treffer: für active_duration Sekunden im active_interval abfragen
+            'active_interval': integer('DISCORD_ACTIVE_INTERVAL', 600, 30, 86400),
+            'active_duration': integer('DISCORD_ACTIVE_DURATION', 7200, 0, 7 * 86400),
             'live_dir': Path(env('DISCORD_ARCHIVE_DIR', default='/archive')),
         }
     elif env('DISCORD_USER_IDS'):
@@ -705,14 +708,30 @@ def poll_discord(db, cfg, tracker):
             break
         key = f'Discord-Kanal {channel}'
         try:
-            poll_channel(db, cfg, channel)
+            hits = poll_channel(db, cfg, channel)
             tracker.ok(key)
         except Exception as exc:
             ok = False
             message = str(exc) if isinstance(exc, (RuntimeError, TimeoutError)) else type(exc).__name__
             fails = tracker.failed(key, message)
             log.error('%s fehlgeschlagen (%d in Folge): %s', key, fails, message)
+            continue
+        d = cfg['discord']
+        if hits and d['active_duration'] and d['active_interval'] < d['interval']:
+            until = time.time() + d['active_duration']
+            if until > kv_get(db, 'discord_active_until', 0):
+                kv_set(db, 'discord_active_until', until)
+            log.info('Treffer in Kanal %s: %d min lang alle %d min abfragen', channel,
+                     d['active_duration'] // 60, d['active_interval'] // 60)
     return ok
+
+
+def discord_interval(db, cfg):
+    """Normales Intervall, nach einem Treffer für eine Weile das kürzere (persistiert über Neustarts)."""
+    d = cfg['discord']
+    if time.time() < kv_get(db, 'discord_active_until', 0):
+        return min(d['active_interval'], d['interval'])
+    return d['interval']
 
 
 # ================================================================ Discord-Archiv (ganze Kanäle)
@@ -873,7 +892,8 @@ def worker(cfg, name, poll, interval, budget):
                 last_prune = time.time()
             failures = min(failures + 1, 4) if failed else 0
             # Erfolg: normales Intervall. Fehler: Backoff, höchstens 15 min (auch beim Archiv).
-            wait = min(min(interval, 300) * 2 ** failures, 900) if failures else interval
+            base = interval(db, cfg) if callable(interval) else interval
+            wait = min(min(base, 300) * 2 ** failures, 900) if failures else base
             write_heartbeat(cfg['data'], name, time.time() + wait + budget)
             STOP.wait(wait)
     except Exception as exc:
@@ -923,7 +943,10 @@ def main():
                  f"nach {d['live_dir']}" if d['live'] else 'aus')
         if d['live'] and not os.path.ismount(d['live_dir']):
             log.warning('%s ist kein gemountetes Verzeichnis: Mitschnitt geht beim Neuerstellen verloren', d['live_dir'])
-        threads.append(('discord', poll_discord, d['interval'], len(d['channels']) * d['timeout'] + 300))
+        if d['active_duration'] and d['active_interval'] < d['interval']:
+            log.info('Discord: nach Treffer %d min lang alle %d min', d['active_duration'] // 60,
+                     d['active_interval'] // 60)
+        threads.append(('discord', poll_discord, discord_interval, len(d['channels']) * d['timeout'] + 300))
     if cfg['archive']:
         a = cfg['archive']
         log.info('Discord-Archiv: %d Kanäle, alle %dh, Format %s, Medien %s, nach %s',
