@@ -25,6 +25,11 @@ if [ -z "${POSTALARM_SUPERVISED:-}" ]; then
     mkdir -p "$DATA_DIR"
     find "$DATA_DIR" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown "$PUID:$PGID" {} +
     chmod 0700 "$DATA_DIR"
+    # Discord-Archiv (nur wenn gemountet): Besitz übernehmen, Rechte lesbar lassen (SMB-Freigabe)
+    ARCHIVE_DIR="${DISCORD_ARCHIVE_DIR:-/archive}"
+    if [ -d "$ARCHIVE_DIR" ]; then
+      find "$ARCHIVE_DIR" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown "$PUID:$PGID" {} +
+    fi
     exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups dumb-init -- "$0" "$@"
   fi
   exec dumb-init -- "$0" "$@"

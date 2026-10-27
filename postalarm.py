@@ -32,6 +32,11 @@ DISCORD_EPOCH_MS = 1420070400000
 # Pushover-Limits laut https://pushover.net/api
 LIMIT_MESSAGE, LIMIT_TITLE, LIMIT_URL, LIMIT_URL_TITLE = 1024, 250, 512, 100
 MODES = ('emergency', 'burst', 'high', 'normal')
+# DiscordChatExporter-Formate (ExportFormat.cs) -> (CLI-Wert, Dateiendung)
+ARCHIVE_FORMATS = {'htmldark': ('HtmlDark', 'html'), 'htmllight': ('HtmlLight', 'html'),
+                   'plaintext': ('PlainText', 'txt'), 'json': ('Json', 'json'), 'csv': ('Csv', 'csv')}
+# DCE meldet leere Zeiträume als Warnung (Exit 0) und legt trotzdem eine leere Datei an
+DCE_EMPTY_MARKER = 'does not contain any messages'
 X_KEEP_SEEN = 500
 X_ACCOUNT_RE = re.compile(r'^[A-Za-z0-9_]{1,15}$')
 # Nur diese Variablen bekommt DiscordChatExporter; Pushover- und X-Zugangsdaten bleiben draußen.
@@ -170,8 +175,37 @@ def load_config():
     elif env('DISCORD_USER_IDS'):
         raise ConfigError('DISCORD_USER_IDS gesetzt, aber DISCORD_CHANNEL_IDS fehlt')
 
-    if not cfg['x'] and not cfg['discord']:
-        raise ConfigError('Keine Quelle konfiguriert: X_ACCOUNTS und/oder DISCORD_CHANNEL_IDS setzen')
+    cfg['archive'] = None
+    if boolean('DISCORD_ARCHIVE'):
+        archive_channels = ids('DISCORD_ARCHIVE_CHANNEL_IDS') or channels
+        if not archive_channels:
+            raise ConfigError('DISCORD_ARCHIVE: DISCORD_ARCHIVE_CHANNEL_IDS oder DISCORD_CHANNEL_IDS setzen')
+        secret('DISCORD_TOKEN')
+        since = env('DISCORD_ARCHIVE_SINCE')
+        if since:
+            try:
+                since_dt = dt.datetime.fromisoformat(since)
+            except ValueError:
+                raise ConfigError('DISCORD_ARCHIVE_SINCE muss ein Datum sein, z. B. 2026-01-01') from None
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=dt.timezone.utc)
+            since = str(snowflake_at(since_dt))
+        partition = env('DISCORD_ARCHIVE_PARTITION')
+        if partition and not re.fullmatch(r'\d+(kb|mb|gb)?', partition.lower()):
+            raise ConfigError('DISCORD_ARCHIVE_PARTITION: Nachrichtenzahl (z. B. 5000) oder Größe (z. B. 20mb)')
+        cfg['archive'] = {
+            'channels': archive_channels,
+            'format': ARCHIVE_FORMATS[choice('DISCORD_ARCHIVE_FORMAT', 'htmldark', tuple(ARCHIVE_FORMATS))],
+            'interval': integer('DISCORD_ARCHIVE_INTERVAL_HOURS', 24, 1, 720) * 3600,
+            'media': boolean('DISCORD_ARCHIVE_MEDIA'),
+            'since': since,
+            'partition': partition.lower(),
+            'timeout': integer('DISCORD_ARCHIVE_TIMEOUT', 7200, 60, 86400),
+            'dir': Path(env('DISCORD_ARCHIVE_DIR', default='/archive')),
+        }
+
+    if not cfg['x'] and not cfg['discord'] and not cfg['archive']:
+        raise ConfigError('Keine Quelle konfiguriert: X_ACCOUNTS, DISCORD_CHANNEL_IDS oder DISCORD_ARCHIVE setzen')
     return cfg
 
 
@@ -596,6 +630,82 @@ def poll_discord(db, cfg, tracker):
     return ok
 
 
+# ================================================================ Discord-Archiv (ganze Kanäle)
+
+def archive_channel(db, cfg, channel, now=None):
+    """Exportiert einen Kanal inkrementell ins Archiv. Gibt die Zahl der geschriebenen Dateien zurück.
+
+    Zeitraum: (letzter Stand, jetzt - 60 s]. Grenzen sind Discord-Snowflakes, damit Folgeläufe
+    lückenlos und ohne Überschneidung aneinander anschließen.
+    """
+    a = cfg['archive']
+    now = now or dt.datetime.now(dt.timezone.utc)
+    key = f'archive:{channel}'
+    after = kv_get(db, key) or a['since']
+    before = str(snowflake_at(now - dt.timedelta(seconds=60)))
+    if after and int(after) >= int(before):
+        return 0
+    cli_format, ext = a['format']
+    stamp = now.astimezone().strftime('%Y-%m-%d_%H%M%S')
+    a['dir'].mkdir(parents=True, exist_ok=True)
+    # %G/%C: Server- und Kanalname, setzt DiscordChatExporter ein (Using-the-CLI.md)
+    args = ['export', '-c', channel, '-f', cli_format, '-o', str(a['dir'] / '%G' / '%C' / f'{stamp}.{ext}'),
+            '--before', before, '--parallel', '1']
+    if after:
+        args += ['--after', after]
+    if a['partition']:
+        args += ['--partition', a['partition']]
+    if a['media']:
+        args += ['--media', '--reuse-media', '--media-dir', str(a['dir'] / '_media') + '/']
+
+    def written():
+        return [p for p in a['dir'].glob(f'*/*/{stamp}*.{ext}') if p.is_file()]
+
+    with tempfile.TemporaryDirectory(prefix='pa-archive-') as tmp:
+        errors = Path(tmp) / 'stderr.log'
+        try:
+            code = run_dce(args, a['timeout'], errors)
+        except TimeoutError:
+            for p in written():
+                p.unlink()
+            raise
+        stderr = errors.read_text(errors='replace') if errors.exists() else ''
+    files = written()
+    if code:
+        for p in files:
+            p.unlink()
+        tail = stderr.strip().splitlines()[-1:] if stderr.strip() else []
+        hint = redact(tail[0], [os.getenv('DISCORD_TOKEN', '')])[:300] if tail else 'keine Ausgabe'
+        raise RuntimeError(f'DiscordChatExporter exit={code}: {hint}')
+    if DCE_EMPTY_MARKER in stderr:
+        for p in files:
+            p.unlink()
+        files = []
+    kv_set(db, key, before)
+    if files:
+        log.info('Archiv Kanal %s: %s', channel, ', '.join(str(p.relative_to(a['dir'])) for p in files))
+    else:
+        log.info('Archiv Kanal %s: keine neuen Nachrichten', channel)
+    return len(files)
+
+
+def poll_archive(db, cfg, tracker):
+    ok = True
+    for channel in sorted(cfg['archive']['channels']):
+        if STOP.is_set():
+            break
+        key = f'Discord-Archiv {channel}'
+        try:
+            archive_channel(db, cfg, channel)
+            tracker.ok(key)
+        except Exception as exc:
+            ok = False
+            message = str(exc) if isinstance(exc, (RuntimeError, TimeoutError)) else type(exc).__name__
+            fails = tracker.failed(key, message)
+            log.error('%s fehlgeschlagen (%d in Folge): %s', key, fails, message)
+    return ok
+
+
 # ================================================================ Health / Selbsttest
 
 def write_heartbeat(data, name, deadline):
@@ -677,7 +787,8 @@ def worker(cfg, name, poll, interval, budget):
                 prune(db, cfg['retention_days'])
                 last_prune = time.time()
             failures = min(failures + 1, 4) if failed else 0
-            wait = min(interval * 2 ** failures, 900)
+            # Erfolg: normales Intervall. Fehler: Backoff, höchstens 15 min (auch beim Archiv).
+            wait = min(min(interval, 300) * 2 ** failures, 900) if failures else interval
             write_heartbeat(cfg['data'], name, time.time() + wait + budget)
             STOP.wait(wait)
     except Exception as exc:
@@ -725,8 +836,15 @@ def main():
         log.info('Discord: %d Benutzer, %d Kanäle, Intervall %ds, Modus %s',
                  len(d['users']), len(d['channels']), d['interval'], d['mode'])
         threads.append(('discord', poll_discord, d['interval'], len(d['channels']) * d['timeout'] + 300))
+    if cfg['archive']:
+        a = cfg['archive']
+        log.info('Discord-Archiv: %d Kanäle, alle %dh, Format %s, Medien %s, nach %s',
+                 len(a['channels']), a['interval'] // 3600, a['format'][0], 'an' if a['media'] else 'aus', a['dir'])
+        if not os.path.ismount(a['dir']):
+            log.warning('%s ist kein gemountetes Verzeichnis: Archiv geht beim Neuerstellen des Containers verloren', a['dir'])
+        threads.append(('archive', poll_archive, a['interval'], len(a['channels']) * a['timeout'] + 300))
     if cfg['test_on_start']:
-        for name, *_ in threads:
+        for name, *_ in [t for t in threads if t[0] in ('x', 'discord')]:
             try:
                 test_alert(cfg, name)
             except PushoverError as err:

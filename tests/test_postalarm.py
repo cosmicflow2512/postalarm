@@ -332,6 +332,113 @@ class DiscordTests(Base):
             self.assertLess(time.monotonic() - start, 10)
 
 
+ARCHIVE_DCE = (
+    'import json, os, sys\n'
+    'a = sys.argv\n'
+    'log = open(ARGS_LOG, "a"); log.write(json.dumps(a[1:]) + "\\n"); log.close()\n'
+    'assert "ARGS_LOG" not in os.environ and "PUSHOVER_TOKEN" not in os.environ\n'
+    'mode = open(MODE_FILE).read().strip()\n'
+    'out = a[a.index("-o") + 1].replace("%G", "Server").replace("%C", "kanal")\n'
+    'os.makedirs(os.path.dirname(out), exist_ok=True)\n'
+    'open(out, "w").write("<html>chat</html>")\n'
+    'if mode == "empty":\n'
+    '    sys.stderr.write("Channel kanal of guild Server does not contain any messages within the specified period; an empty file will be created.\\n")\n'
+    'if mode == "fail":\n'
+    '    sys.stderr.write("Authentication token discord-secret-token is invalid.\\n"); sys.exit(1)\n'
+)
+
+
+class ArchiveTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.dir = Path(self.tmp.name) / 'archive'
+        self.mode = Path(self.tmp.name) / 'mode'
+        self.argslog = Path(self.tmp.name) / 'args.log'
+        script = f'ARGS_LOG = {str(self.argslog)!r}\nMODE_FILE = {str(self.mode)!r}\n' + ARCHIVE_DCE
+        self.env = {'DCE_EXECUTABLE': fake_dce(self.tmp.name, script), 'ARGS_LOG': 'leak-check'}
+
+    def cfg(self, **kw):
+        return config(DISCORD_ARCHIVE='true', DISCORD_ARCHIVE_DIR=str(self.dir), **kw)
+
+    def run_archive(self, cfg, mode, minutes=0):
+        self.mode.write_text(mode)
+        now = dt.datetime(2026, 10, 27, 12, 0, tzinfo=dt.timezone.utc) + dt.timedelta(minutes=minutes)
+        with patch.dict(os.environ, {**ENV, **self.env}):
+            return pa.archive_channel(self.db, cfg, '20', now)
+
+    def calls(self):
+        return [json.loads(line) for line in self.argslog.read_text().splitlines()]
+
+    def test_config(self):
+        cfg = self.cfg()
+        self.assertEqual(cfg['archive']['channels'], {'20'})
+        self.assertEqual(cfg['archive']['format'], ('HtmlDark', 'html'))
+        self.assertEqual(cfg['archive']['interval'], 86400)
+        cfg = self.cfg(DISCORD_ARCHIVE_CHANNEL_IDS='7,8', DISCORD_ARCHIVE_FORMAT='PlainText',
+                       DISCORD_ARCHIVE_SINCE='2026-01-01', DISCORD_ARCHIVE_PARTITION='20MB')
+        self.assertEqual(cfg['archive']['channels'], {'7', '8'})
+        self.assertEqual(cfg['archive']['format'], ('PlainText', 'txt'))
+        self.assertEqual(cfg['archive']['partition'], '20mb')
+        self.assertEqual(int(cfg['archive']['since']),
+                         pa.snowflake_at(dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)))
+        self.assertIsNone(config()['archive'])
+        # Archiv allein, ohne Überwachung und ohne X
+        only = config(X_ACCOUNTS='', DISCORD_CHANNEL_IDS='', DISCORD_USER_IDS='', DISCORD_ARCHIVE='true',
+                      DISCORD_ARCHIVE_CHANNEL_IDS='9')
+        self.assertEqual(only['archive']['channels'], {'9'})
+        for key, value in [('DISCORD_ARCHIVE_FORMAT', 'pdf'), ('DISCORD_ARCHIVE_SINCE', 'gestern'),
+                           ('DISCORD_ARCHIVE_PARTITION', 'viel'), ('DISCORD_ARCHIVE_INTERVAL_HOURS', '0')]:
+            with self.assertRaises(pa.ConfigError, msg=key):
+                self.cfg(**{key: value})
+        with self.assertRaises(pa.ConfigError):
+            config(DISCORD_CHANNEL_IDS='', DISCORD_USER_IDS='', DISCORD_ARCHIVE='true')
+
+    def test_full_then_incremental(self):
+        cfg = self.cfg(DISCORD_ARCHIVE_MEDIA='true')
+        self.assertEqual(self.run_archive(cfg, 'ok'), 1)
+        first = self.calls()[0]
+        self.assertNotIn('--after', first, 'erster Lauf exportiert die ganze Historie')
+        self.assertEqual(first[first.index('-f') + 1], 'HtmlDark')
+        self.assertIn('--media', first)
+        self.assertTrue(first[first.index('--media-dir') + 1].endswith('/'))
+        self.assertNotIn('--token', first)
+        files = list(self.dir.glob('Server/kanal/*.html'))
+        self.assertEqual(len(files), 1)
+        # Zweiter Lauf schließt exakt an das "before" des ersten an
+        self.run_archive(cfg, 'ok', minutes=60)
+        second = self.calls()[1]
+        self.assertEqual(second[second.index('--after') + 1], first[first.index('--before') + 1])
+        self.assertEqual(len(list(self.dir.glob('Server/kanal/*.html'))), 2)
+
+    def test_empty_period_leaves_no_file_but_advances(self):
+        cfg = self.cfg()
+        self.assertEqual(self.run_archive(cfg, 'empty'), 0)
+        self.assertEqual(list(self.dir.glob('**/*.html')), [])
+        self.assertIsNotNone(pa.kv_get(self.db, 'archive:20'))
+
+    def test_failure_removes_partial_file_and_keeps_cursor(self):
+        cfg = self.cfg()
+        with self.assertRaises(RuntimeError) as ctx:
+            self.run_archive(cfg, 'fail')
+        self.assertNotIn('discord-secret-token', str(ctx.exception))
+        self.assertEqual(list(self.dir.glob('**/*.html')), [])
+        self.assertIsNone(pa.kv_get(self.db, 'archive:20'))
+
+    def test_since(self):
+        cfg = self.cfg(DISCORD_ARCHIVE_SINCE='2026-10-01T00:00:00+00:00')
+        self.run_archive(cfg, 'ok')
+        args = self.calls()[0]
+        self.assertEqual(args[args.index('--after') + 1], cfg['archive']['since'])
+
+    def test_poll_reports_failures(self):
+        cfg = self.cfg(FAIL_ALERT_THRESHOLD='100')
+        self.mode.write_text('fail')
+        with patch.dict(os.environ, {**ENV, **self.env}):
+            self.assertFalse(pa.poll_archive(self.db, cfg, pa.FailureTracker(cfg)))
+            self.mode.write_text('ok')
+            self.assertTrue(pa.poll_archive(self.db, cfg, pa.FailureTracker(cfg)))
+
+
 class HealthTests(Base):
     def test_healthcheck(self):
         data = Path(self.tmp.name)

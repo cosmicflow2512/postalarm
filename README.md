@@ -97,6 +97,33 @@ Ungültige Werte beenden den Start mit `Konfigurationsfehler: …` im Log.
 
 IDs und Tokens: Discord-Entwicklermodus (Einstellungen → Erweitert), dann Rechtsklick → ID kopieren. Token-Anleitung siehe [Token-and-IDs.md](https://github.com/Tyrrrz/DiscordChatExporter/blob/prime/.docs/Token-and-IDs.md). X-Cookie: in einer eingeloggten x.com-Session in den Browser-DevTools unter Cookies den Wert `auth_token` kopieren.
 
+## Discord-Archiv
+
+Optional exportiert postalarm ganze Kanäle mit allen Nachrichten aller User, unabhängig vom Alarm-Filter. Der Export läuft in einem eigenen Thread, die Überwachung läuft parallel weiter.
+
+| Variable | Standard | Bedeutung |
+| --- | --- | --- |
+| `DISCORD_ARCHIVE` | `false` | Archiv an |
+| `DISCORD_ARCHIVE_CHANNEL_IDS` | = `DISCORD_CHANNEL_IDS` | zu archivierende Kanäle/Threads |
+| `DISCORD_ARCHIVE_FORMAT` | `HtmlDark` | `HtmlDark`, `HtmlLight`, `PlainText`, `Json`, `Csv` (DiscordChatExporter-Formate) |
+| `DISCORD_ARCHIVE_INTERVAL_HOURS` | `24` | Abstand der Exporte |
+| `DISCORD_ARCHIVE_MEDIA` | `false` | Anhänge, Bilder, Avatare mitladen (`--media --reuse-media`) |
+| `DISCORD_ARCHIVE_SINCE` | leer | erster Export ab Datum; leer = komplette Historie |
+| `DISCORD_ARCHIVE_PARTITION` | leer | große Exporte aufteilen, z. B. `5000` oder `20mb` |
+| `DISCORD_ARCHIVE_TIMEOUT` | `7200` | Sekunden je Kanalexport |
+
+Ablage im Pfad `/archive`:
+
+```
+/archive/<Server>/<Kanal>/2026-10-27_120000.html   erster Lauf: Historie bis jetzt
+/archive/<Server>/<Kanal>/2026-10-28_120000.html   danach: nur Neues seit dem letzten Lauf
+/archive/_media/                                    Anhänge (wenn DISCORD_ARCHIVE_MEDIA=true)
+```
+
+Jeder Lauf exportiert den Zeitraum seit dem letzten Lauf. Die Grenzen sind Discord-Message-IDs, deshalb gibt es weder Lücken noch Doppelungen. Leere Zeiträume erzeugen keine Datei. Bricht ein Export ab, wird die Teil-Datei gelöscht und beim nächsten Lauf neu versucht. Server- und Kanalnamen setzt DiscordChatExporter ein. Wird ein Kanal umbenannt, entsteht ein neuer Ordner.
+
+Bearbeitete oder gelöschte Nachrichten werden nicht nachträglich aktualisiert. Jede Datei zeigt den Stand zum Zeitpunkt des Exports. Für das Archiv gilt dasselbe ToS-Risiko wie für die Überwachung. Ein erster Komplettexport großer Kanäle erzeugt viele API-Anfragen.
+
 ## Sicherheitsmodell
 
 - Der Supervisor startet als root, übernimmt `/data` für `PUID:PGID` (Rechte `0700`) und startet sich per `setpriv` ohne root neu. RSSHub (Node), postalarm (Python) und DiscordChatExporter laufen danach als dieser Benutzer. Auch der Init-Prozess (`dumb-init`) läuft ohne root, damit `docker stop` trotz entfernter Capabilities funktioniert. Kein `--init` hinzufügen: Ein Init unter root ohne `CAP_KILL` kann Prozessen von uid 99 keine Signale schicken.

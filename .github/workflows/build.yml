@@ -68,6 +68,16 @@ jobs:
             --reuid=99 --regid=100 --clear-groups python3 /opt/postalarm/postalarm.py --self-test 2>&1 | tee self-test.log
           grep -q 'uid=99 gid=100' self-test.log
 
+      - name: DCE in image supports all options used by postalarm
+        run: |
+          docker run --rm -e HOME=/tmp --entrypoint /opt/dce/DiscordChatExporter.Cli "$SMOKE_TAG" export --help > dce-help.log 2>&1 || true
+          for opt in --channel --format --output --after --before --partition --media --reuse-media --media-dir --parallel; do
+            grep -q -- "$opt" dce-help.log || { echo "fehlt: $opt"; cat dce-help.log; exit 1; }
+          done
+          for fmt in HtmlDark HtmlLight PlainText Json Csv; do
+            grep -q "$fmt" dce-help.log || { echo "Format fehlt: $fmt"; exit 1; }
+          done
+
       - name: Migration script inside the image
         run: |
           out="$(mktemp -d)"
@@ -112,7 +122,7 @@ jobs:
             docker logs smoke 2>&1 | grep -v '^$' | tail -n 40 | tr '\n' '\r' | sed 's/\r/%0A/g; s/^/::error title=smoke::/'; echo
             echo "::error title=smoke-state::$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' smoke)"
           fi
-          for f in boot.log self-test.log migrate.log ps.log; do
+          for f in boot.log self-test.log dce-help.log migrate.log ps.log; do
             [ -f "$f" ] && tail -n 20 "$f" | tr '\n' '\r' | sed "s/\r/%0A/g; s/^/::error title=$f::/" && echo
           done
           true
