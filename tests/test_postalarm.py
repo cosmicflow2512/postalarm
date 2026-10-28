@@ -499,14 +499,14 @@ class LiveTests(Base):
         with self.db:
             self.db.execute('INSERT INTO cursors VALUES (?,?)', ('20', '1000'))
         with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, script)}):
-            pa.poll_channel(self.db, cfg, '20')
+            pa.poll_window(self.db, cfg, '20', '1000', None)
         self.assertEqual(self.db.execute("SELECT after FROM cursors WHERE channel='20'").fetchone()[0], '1000')
         self.assertIsNone(pa.kv_get(self.db, 'live:20'))
         # Alarm-Treffer (User 30) wurde trotzdem eingereiht
         self.assertEqual(self.db.execute('SELECT id FROM pending').fetchall(), [('discord:1001',)])
         blocker.unlink()
         with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, script)}):
-            pa.poll_channel(self.db, cfg, '20')
+            pa.poll_window(self.db, cfg, '20', '1000', None)
         self.assertEqual(self.db.execute("SELECT after FROM cursors WHERE channel='20'").fetchone()[0], '1003')
         self.assertEqual(self.db.execute('SELECT count(*) FROM pending').fetchone()[0], 1)
 
@@ -603,6 +603,41 @@ class SwitchTests(unittest.TestCase):
                                  env={'X_ENABLED': value, 'X_ACCOUNTS': 'a', 'PATH': os.environ['PATH']},
                                  capture_output=True, text=True).stdout.strip()
             self.assertEqual(out, expected, value)
+
+
+class CatchupTests(Base):
+    def test_backlog_is_exported_in_windows(self):
+        log = Path(self.tmp.name) / 'calls.log'
+        script = (f'import json, sys\na = sys.argv\nopen({str(log)!r}, "a").write(json.dumps(a[1:]) + "\\n")\n'
+                  'json.dump({"guild": {"id": "10"}, "channel": {"id": "20", "name": "g"}, "messages": []}, '
+                  'open(a[a.index("-o") + 1], "w"))\n')
+        cfg = config(DISCORD_CATCHUP_HOURS='2')
+        now = dt.datetime(2026, 10, 28, 10, 0, tzinfo=dt.timezone.utc)
+        start = now - dt.timedelta(hours=9)
+        with self.db:
+            self.db.execute('INSERT INTO cursors VALUES (?,?)', ('20', str(pa.snowflake_at(start))))
+        with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, script)}):
+            pa.poll_channel(self.db, cfg, '20', now=now)
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        # 9 h Rückstand in 2-h-Fenstern: 4 begrenzte Exporte, dann einer bis jetzt
+        self.assertEqual(len(calls), 5)
+        afters = [c[c.index('--after') + 1] for c in calls]
+        befores = [c[c.index('--before') + 1] for c in calls]
+        for i in range(4):
+            self.assertEqual(int(afters[i + 1]), int(befores[i]) - 1, 'lückenlos aneinander')
+        self.assertAlmostEqual(pa.cursor_time(befores[3]).timestamp(),
+                               (start + dt.timedelta(hours=8)).timestamp(), delta=1)
+        self.assertIn('T', befores[4], 'letzter Export bis jetzt (ISO-Zeit)')
+
+    def test_failed_window_keeps_cursor(self):
+        cfg = config(DISCORD_CATCHUP_HOURS='2', EXPORT_TIMEOUT_SECONDS='30')
+        start = dt.datetime(2026, 10, 28, 0, 0, tzinfo=dt.timezone.utc)
+        with self.db:
+            self.db.execute('INSERT INTO cursors VALUES (?,?)', ('20', str(pa.snowflake_at(start))))
+        with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': fake_dce(self.tmp.name, 'import sys\nsys.exit(1)\n')}):
+            with self.assertRaises(RuntimeError):
+                pa.poll_channel(self.db, cfg, '20', now=start + dt.timedelta(hours=9))
+        self.assertEqual(self.db.execute("SELECT after FROM cursors").fetchone()[0], str(pa.snowflake_at(start)))
 
 
 class HealthTests(Base):

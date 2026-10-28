@@ -177,6 +177,8 @@ def load_config():
             'lookback': integer('INITIAL_LOOKBACK_SECONDS', 0, 0, 30 * 86400),
             'timeout': integer('EXPORT_TIMEOUT_SECONDS', 300, 30, 3600),
             'live': boolean('DISCORD_LIVE'),
+            # Rückstand in Fenstern dieser Größe exportieren (verhindert Timeouts nach Pausen)
+            'catchup_hours': integer('DISCORD_CATCHUP_HOURS', 2, 1, 168),
             # Nach einem Treffer: für active_duration Sekunden im active_interval abfragen
             'active_interval': integer('DISCORD_ACTIVE_INTERVAL', 600, 30, 86400),
             'active_duration': integer('DISCORD_ACTIVE_DURATION', 7200, 0, 7 * 86400),
@@ -579,12 +581,12 @@ def run_dce(args, timeout, stderr_path):
                     raise TimeoutError('Export abgebrochen' if STOP.is_set() else 'Export-Timeout') from None
 
 
-def export(channel, after, workdir, timeout=300):
+def export(channel, after, workdir, timeout=300, before=None):
     workdir = Path(workdir)
     output, errors = workdir / 'messages.json', workdir / 'stderr.log'
     # Token nur über die Umgebung, nie als Argument (sichtbar in ps/docker top).
     args = ['export', '-c', channel, '-f', 'Json', '-o', str(output), '--after', after,
-            '--before', dt.datetime.now(dt.timezone.utc).isoformat(), '--parallel', '1']
+            '--before', before or dt.datetime.now(dt.timezone.utc).isoformat(), '--parallel', '1']
     code = run_dce(args, timeout, errors)
     if code:
         raise RuntimeError(f"DiscordChatExporter exit={code}: "
@@ -611,7 +613,7 @@ def ingest_discord(db, doc, users, channels, guilds):
             name = author.get('nickname') or author.get('name') or author.get('id')
             payload = {'source': 'discord',
                        'title': f"{name} in #{doc['channel'].get('name') or channel}",
-                       'message': f"{message.get('timestamp', '')}\n"
+                       'message': f"{message_time(message):%d.%m. %H:%M}\n"
                                   f"{message.get('content') or '[Anhang oder Nachricht ohne Text]'}",
                        'url': f'https://discord.com/channels/{guild if guild != "0" else "@me"}/{channel}/{mid}',
                        'url_title': 'Nachricht öffnen'}
@@ -697,11 +699,37 @@ def live_append(db, cfg, doc):
     return True
 
 
-def poll_channel(db, cfg, channel):
+def cursor_time(after):
+    """Zeitpunkt eines Cursors (Message-ID oder ISO-Datum)."""
+    if after.isdigit():
+        return dt.datetime.fromtimestamp(((int(after) >> 22) + DISCORD_EPOCH_MS) / 1000, dt.timezone.utc)
+    when = dt.datetime.fromisoformat(after)
+    return when if when.tzinfo else when.replace(tzinfo=dt.timezone.utc)
+
+
+def poll_channel(db, cfg, channel, now=None):
+    """Exportiert neue Nachrichten. Großer Rückstand wird in Zeitfenstern abgearbeitet, damit ein
+    einzelner Export nie zu groß wird (sonst Timeout -> Cursor bleibt stehen -> Rückstand wächst)."""
     d = cfg['discord']
-    after = db.execute('SELECT after FROM cursors WHERE channel=?', (channel,)).fetchone()[0]
+    window = dt.timedelta(hours=d['catchup_hours'])
+    total = 0
+    for _ in range(48):
+        after = db.execute('SELECT after FROM cursors WHERE channel=?', (channel,)).fetchone()[0]
+        current = now or dt.datetime.now(dt.timezone.utc)
+        end = cursor_time(after) + window
+        capped = end < current - dt.timedelta(minutes=1)
+        before = str(snowflake_at(end)) if capped else None
+        hits, progressed = poll_window(db, cfg, channel, after, before)
+        total += hits
+        if not capped or not progressed or STOP.is_set():
+            break
+    return total
+
+
+def poll_window(db, cfg, channel, after, before):
+    d = cfg['discord']
     with tempfile.TemporaryDirectory(prefix='pa-') as tmp:
-        doc = export(channel, after, tmp, d['timeout'])
+        doc = export(channel, after, tmp, d['timeout'], before)
     messages = doc['messages']
     # Live-Mitschnitt zuerst; schlägt er fehl, bleibt der Cursor stehen und der Bereich wird erneut
     # exportiert. Alarme laufen trotzdem (Duplikatschutz), der Mitschnitt holt nach.
@@ -709,12 +737,22 @@ def poll_channel(db, cfg, channel):
     with db:
         count = ingest_discord(db, doc, d['users'], d['channels'], d['guilds'])
         # Cursor nur auf empfangene Nachricht setzen, nie auf Uhrzeit: keine Lücken bei Verzögerung.
+        new_after = None
         if messages and live_ok:
             newest = max(int(m['id']) for m in messages)
             if not after.isdigit() or newest > int(after):
-                db.execute('UPDATE cursors SET after=? WHERE channel=?', (str(newest), channel))
-    log.info('Discord-Kanal %s: %d Nachrichten, %d neue Treffer', channel, len(messages), count)
-    return count
+                new_after = newest
+        if before and live_ok:
+            # Fenster vollständig exportiert: bis zum Fensterende weiterrücken, auch ohne Nachrichten
+            new_after = max(new_after or 0, int(before) - 1)
+        if new_after is not None:
+            db.execute('UPDATE cursors SET after=? WHERE channel=?', (str(new_after), channel))
+    if before:
+        log.info('Discord-Kanal %s: Rückstand bis %s: %d Nachrichten, %d neue Treffer', channel,
+                 cursor_time(before).astimezone().strftime('%d.%m. %H:%M'), len(messages), count)
+    else:
+        log.info('Discord-Kanal %s: %d Nachrichten, %d neue Treffer', channel, len(messages), count)
+    return count, new_after is not None
 
 
 def poll_discord(db, cfg, tracker):

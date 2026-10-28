@@ -84,6 +84,7 @@ Der Zustand wird nicht übernommen, das ist auch nicht nötig. X markiert beim e
 | `DISCORD_GUILD_IDS` | – | optionaler zusätzlicher Serverfilter |
 | `DISCORD_MODE` | `normal` | siehe Alarm-Modi |
 | `DISCORD_POLL_INTERVAL` | `60` | Sekunden, Minimum 30 |
+| `DISCORD_CATCHUP_HOURS` | `2` | Rückstand nach Pausen oder Ausfällen in Zeitfenstern dieser Größe nachholen, jedes Fenster ist ein eigener Export. Verhindert, dass ein großer Rückstand im Timeout hängen bleibt |
 | `INITIAL_LOOKBACK_SECONDS` | `0` | nur beim allerersten Start je Kanal |
 | `EXPORT_TIMEOUT_SECONDS` | `300` | je Kanalexport, 30–3600 |
 | `EMERGENCY_RETRY`, `EMERGENCY_EXPIRE` | `30`, `3600` | Emergency-Modus |
