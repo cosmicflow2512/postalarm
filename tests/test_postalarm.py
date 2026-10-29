@@ -640,6 +640,26 @@ class CatchupTests(Base):
         self.assertEqual(self.db.execute("SELECT after FROM cursors").fetchone()[0], str(pa.snowflake_at(start)))
 
 
+class AuthInvalidTests(Base):
+    def test_invalid_token_pauses_discord_and_notifies_once(self):
+        script = ('import sys\nopen(sys.argv[0] + ".calls", "a").write("x")\n'
+                  'sys.stderr.write("DiscordChatExporterException: Authentication token is invalid.\\n")\nsys.exit(1)\n')
+        exe = fake_dce(self.tmp.name, script)
+        cfg = config(DISCORD_CHANNEL_IDS='20,21')
+        with self.db:
+            for ch in ('20', '21'):
+                self.db.execute('INSERT INTO cursors VALUES (?,?)', (ch, str(pa.snowflake_at(
+                    dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=5)))))
+        notes = []
+        with patch.dict(os.environ, {**ENV, 'DCE_EXECUTABLE': exe}), \
+                patch.object(pa, 'notify', lambda c, title, msg, prio=0: notes.append(title)):
+            tracker = pa.FailureTracker(cfg)
+            self.assertTrue(pa.poll_discord(self.db, cfg, tracker))
+            self.assertTrue(pa.poll_discord(self.db, cfg, tracker))
+        self.assertEqual(Path(exe + '.calls').read_text(), 'x', 'nur ein Exportversuch insgesamt')
+        self.assertEqual(notes, ['postalarm: Discord-Token ungültig'])
+
+
 class HealthTests(Base):
     def test_healthcheck(self):
         data = Path(self.tmp.name)

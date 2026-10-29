@@ -755,9 +755,16 @@ def poll_window(db, cfg, channel, after, before):
     return count, new_after is not None
 
 
+AUTH_INVALID_MARKERS = ('Authentication token is invalid', 'Unauthorized')
+
+
 def poll_discord(db, cfg, tracker):
     ok = True
-    for channel in sorted(cfg['discord']['channels']):
+    d = cfg['discord']
+    if d.get('auth_invalid'):
+        # Ungültiger Token: keine weiteren Anfragen an Discord bis zum Neustart (neuer Token per Apply)
+        return True
+    for channel in sorted(d['channels']):
         if STOP.is_set():
             break
         key = f'Discord-Kanal {channel}'
@@ -767,10 +774,16 @@ def poll_discord(db, cfg, tracker):
         except Exception as exc:
             ok = False
             message = str(exc) if isinstance(exc, (RuntimeError, TimeoutError)) else type(exc).__name__
+            if any(marker in message for marker in AUTH_INVALID_MARKERS):
+                d['auth_invalid'] = True
+                log.error('Discord-Token ungültig: Discord pausiert bis zum nächsten Neustart/Apply')
+                notify(cfg, 'postalarm: Discord-Token ungültig',
+                       'Discord wird nicht mehr abgefragt. Neuen Token in DISCORD_TOKEN eintragen und Apply. '
+                       'Nachrichten seit dem letzten Abruf werden danach nachgeholt.', 1)
+                return True
             fails = tracker.failed(key, message)
             log.error('%s fehlgeschlagen (%d in Folge): %s', key, fails, message)
             continue
-        d = cfg['discord']
         if hits and d['active_duration'] and d['active_interval'] < d['interval']:
             until = time.time() + d['active_duration']
             if until > kv_get(db, 'discord_active_until', 0):
