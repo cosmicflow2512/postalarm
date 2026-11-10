@@ -29,6 +29,30 @@ RUN set -eu; \
     chmod -R a+rX /opt/dce; \
     chmod 0755 /opt/dce/DiscordChatExporter.Cli
 
+# RSSHub-Bug seit 2026-11-06 (Upgrade x-client-transaction-id 0.3.2 -> 0.3.3, RSSHub #23808):
+# RSSHub erzeugt die Transaktions-ID mit einem Objekt, das nur `isInitialized: true` setzt.
+# 0.3.3 prüft stattdessen `this.keys` und liefert key/animationKey nicht mehr als Felder, also
+# scheitert jede X-Abfrage mit "ClientTransaction has not been initialized" (HTTP 503).
+# Workaround: genau dann 0.3.2 einsetzen, wenn 0.3.3 installiert ist UND RSSHub noch den alten
+# Code enthält. Sobald RSSHub das selbst behebt, greift der Schritt nicht mehr.
+ARG XCT_FIX_VERSION=0.3.2
+# SHA-256 von https://registry.npmjs.org/x-client-transaction-id/-/x-client-transaction-id-0.3.2.tgz
+ARG XCT_FIX_SHA256=9f78a666c0abda76030d99bf6dfb3f58c68ffee3e2832f6aefb323500fed51ff
+RUN set -eu; \
+    pkg="$(readlink -f /app/node_modules/x-client-transaction-id)"; \
+    ver="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$pkg/package.json")"; \
+    if [ "$ver" = "0.3.3" ] && grep -rqs 'isInitialized' /app/dist; then \
+      curl -fsSL -o /tmp/xct.tgz \
+        "https://registry.npmjs.org/x-client-transaction-id/-/x-client-transaction-id-${XCT_FIX_VERSION}.tgz"; \
+      echo "$XCT_FIX_SHA256  /tmp/xct.tgz" | sha256sum -c -; \
+      rm -rf "$pkg"; mkdir "$pkg"; \
+      tar -xzf /tmp/xct.tgz -C "$pkg" --strip-components=1 --no-same-owner; \
+      rm /tmp/xct.tgz; \
+      echo "x-client-transaction-id $ver -> $XCT_FIX_VERSION ersetzt"; \
+    else \
+      echo "x-client-transaction-id $ver: kein Workaround nötig"; \
+    fi
+
 COPY postalarm.py migrate.py start.sh templates/my-postalarm.xml /opt/postalarm/
 RUN chmod 0755 /opt/postalarm /opt/postalarm/start.sh \
  && chmod 0644 /opt/postalarm/postalarm.py /opt/postalarm/migrate.py /opt/postalarm/my-postalarm.xml

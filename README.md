@@ -201,6 +201,10 @@ Die CI testet Python, baut ein amd64-Testimage und prüft darin: Tests mit dem P
 
 DiscordChatExporter `2.48` wird als offizielles Release-Asset geladen und per SHA-256 geprüft. Für ein Update `DCE_VERSION` und die beiden Prüfsummen im Dockerfile anpassen.
 
+### RSSHub-Workaround `x-client-transaction-id`
+
+Seit dem RSSHub-Image vom 2026-11-06 ([#23808](https://github.com/DIYgod/RSSHub/pull/23808), Upgrade auf `x-client-transaction-id` 0.3.3) scheitern X-Abrufe mit `HTTP 503: ClientTransaction has not been initialized`. RSSHub ([client-transaction-id.ts](https://github.com/DIYgod/RSSHub/blob/master/lib/routes/twitter/api/web-api/client-transaction-id.ts)) setzt nur `isInitialized: true`, Version 0.3.3 prüft aber `this.keys` und gibt `key`/`animationKey` nicht mehr als Felder zurück. Der Dockerfile setzt deshalb beim Build Version 0.3.2 ein (per SHA-256 geprüft), aber nur solange RSSHub 0.3.3 mit dem alten Code ausliefert. Das Build-Log zeigt, ob der Schritt gegriffen hat. Behebt RSSHub das selbst, kann der Schritt entfernt werden.
+
 ## Lizenz
 
 MIT, siehe LICENSE. RSSHub und DiscordChatExporter sind eigenständige Projekte unter ihren eigenen Lizenzen.
